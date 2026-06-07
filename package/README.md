@@ -15,6 +15,9 @@ Pure Dart FFI bindings for the [Zenoh](https://zenoh.io/) pub/sub/query protocol
 - Throughput benchmarking (heap tight-loop and SHM zero-copy)
 - Cross-language typed serialization/deserialization (ZSerializer, ZDeserializer)
 - Raw byte assembly (ZBytesWriter) and fragmented slice iteration
+- Byte-exact binary payload delivery (protobuf/flatbuffers/CDR-safe) via `payloadBytes`
+- Advanced pub/sub: publisher cache, history recovery, sample miss detection with heartbeats
+- Key expression matching (`intersects`/`includes`/`equals`) for storage-style routing
 - Shared memory (SHM) zero-copy for publish, get, and reply (Linux)
 - Network scouting and session info
 - Build hooks for seamless native library distribution
@@ -25,19 +28,19 @@ Pure Dart FFI bindings for the [Zenoh](https://zenoh.io/) pub/sub/query protocol
 import 'package:zenoh/zenoh.dart';
 
 void main() async {
-  final session = Session.open(Config.defaultConfig());
+  final session = Session.open();
 
   // Publish
-  session.put(KeyExpr('demo/hello'), 'Hello from Dart!');
+  session.put('demo/hello', 'Hello from Dart!');
 
   // Subscribe
-  final subscriber = session.declareSubscriber(KeyExpr('demo/**'));
+  final subscriber = session.declareSubscriber('demo/**');
   subscriber.stream.listen((sample) {
     print('${sample.keyExpr}: ${sample.payload}');
   });
 
   // Declare a publisher
-  final publisher = session.declarePublisher(KeyExpr('demo/counter'));
+  final publisher = session.declarePublisher('demo/counter');
   publisher.put('value');
 
   // Query/reply
@@ -53,21 +56,29 @@ void main() async {
 }
 ```
 
+Binary payloads round-trip byte-exact: publish with `putBytes(key, ZBytes.fromUint8List(bytes))` and read `sample.payloadBytes` on receive (`sample.payload` is a lenient display string — invalid UTF-8 renders as U+FFFD).
+
 ## API
 
 | Class | Description |
 |-------|-------------|
 | `Zenoh` | Static utilities: `initLog()`, `scout()` |
 | `Config` | Session configuration with JSON5 insertion |
-| `Session` | Open/close sessions; put, subscribe, publish, get, queryable, pull subscribe, querier, liveliness, background subscribe |
-| `KeyExpr` | Key expression creation and validation |
+| `Session` | Open/close sessions; put, subscribe, publish, get, queryable, pull subscribe, querier, liveliness, background subscribe, advanced publish/subscribe |
+| `KeyExpr` | Key expression creation and validation; `intersects()`/`includes()`/`equals()` matching |
 | `ZBytes` | Binary payload container; `clone()`, `toBytes()`, `fromInt()`/`toInt()`, `fromDouble()`/`toDouble()`, `fromBool()`/`toBool()`, `slices` (fragment iteration), `isShmBacked` |
 | `ZSerializer` | Streaming serializer for multi-value payloads (uint8–int64, float, double, bool, string, bytes, sequence length) |
 | `ZDeserializer` | Type-safe streaming deserializer with `isDone` state tracking |
 | `ZBytesWriter` | Raw byte assembler via `writeAll()`, `append()` (consumed), `finish()` |
 | `LivelinessToken` | Announces entity presence; intersecting subscribers notified on declare/close |
 | `Publisher` | Declared publisher with put/delete/matching status/express mode |
+| `AdvancedPublisher` | Publisher with cache, publisher detection, and sample miss detection |
+| `AdvancedPublisherOptions` | Cache size, publisher detection, miss detection, heartbeat mode/period |
+| `HeartbeatMode` | Enum: `none`, `periodic`, `sporadic` |
 | `Subscriber` | Callback-based subscriber delivering `Stream<Sample>` |
+| `AdvancedSubscriber` | Subscriber with history recovery, late publisher detection, and miss events |
+| `AdvancedSubscriberOptions` | History, recovery, miss detection, subscriber detection, miss listener |
+| `MissEvent` | Missed-sample notification with source `ZenohId` and count |
 | `PullSubscriber` | Ring-buffer-backed pull subscriber with `tryRecv()` (lossy) |
 | `Querier` | Declared querier for repeated queries with matching status |
 | `Query` | Received query with reply/replyBytes/dispose |
@@ -76,7 +87,7 @@ void main() async {
 | `ReplyError` | Error reply with payload and encoding |
 | `QueryTarget` | Enum: `bestMatching`, `all`, `allComplete` |
 | `ConsolidationMode` | Enum: `auto`, `none`, `monotonic`, `latest` |
-| `Sample` | Received data with key, payload, kind, encoding, attachment |
+| `Sample` | Received data with key, payload (lenient display string), payloadBytes (exact), kind, encoding, attachment |
 | `SampleKind` | Enum: `put`, `delete` |
 | `Encoding` | MIME type wrapper with predefined constants |
 | `CongestionControl` | Enum: `block`, `drop` |
@@ -117,6 +128,9 @@ All examples live in [`example/`](example/) and support `-e`/`--connect` and `-l
 | [`z_sub_thr.dart`](example/z_sub_thr.dart) | Background subscriber counting throughput (reports msg/s) |
 | [`z_pub_shm_thr.dart`](example/z_pub_shm_thr.dart) | Tight-loop SHM throughput publisher (requires z_sub_thr) |
 | [`z_bytes.dart`](example/z_bytes.dart) | Serialization round-trip demo (no network) |
+| [`z_storage.dart`](example/z_storage.dart) | In-memory storage: subscriber stores PUT/DELETE, queryable replies with matching entries |
+| [`z_advanced_pub.dart`](example/z_advanced_pub.dart) | Advanced publisher with cache, publisher detection, and heartbeat |
+| [`z_advanced_sub.dart`](example/z_advanced_sub.dart) | Advanced subscriber with history recovery, miss detection, and miss listener |
 
 ```bash
 # Quick start examples

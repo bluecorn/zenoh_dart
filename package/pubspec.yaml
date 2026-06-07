@@ -1,7 +1,7 @@
 name: zenoh
 description: "Dart bindings for the Zenoh pub/sub/query protocol via FFI."
-version: 0.0.1
-repository: https://github.com/hugo-bluecorn/zenoh_dart
+version: 0.18.1
+repository: https://github.com/bluecorn/zenoh_dart
 
 environment:
   sdk: ^3.11.0

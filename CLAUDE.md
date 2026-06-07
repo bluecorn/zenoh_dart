@@ -11,14 +11,14 @@ Pure Dart FFI package providing bindings for [Zenoh](https://zenoh.io/) (a pub/s
 ```
 zenoh_dart/
   package/                      # PUBLISH BOUNDARY — dart pub publish runs here
-    lib/                        #   Dart API (27 classes)
+    lib/                        #   Dart API (36 classes/enums)
     hook/                       #   Dart build hooks (CodeAsset registration)
     native/                     #   Prebuilt shared libraries (linux/x86_64/, android/<abi>/)
-    example/                    #   CLI examples (18: z_put, z_sub, z_pub, z_get, z_queryable, z_ping, etc.)
-    test/                       #   Integration tests (372 tests)
+    example/                    #   CLI examples (26: z_put, z_sub, z_pub, z_get, z_queryable, z_ping, z_storage, z_advanced_pub, etc.)
+    test/                       #   Integration tests (525 tests)
     pubspec.yaml
   src/                          # C shim source (outside publish boundary)
-    zenoh_dart.{h,c}            #   92 C shim functions
+    zenoh_dart.{h,c}            #   155 C shim functions
     CMakeLists.txt
     dart/                       #   Dart API DL headers
   extern/
@@ -134,6 +134,30 @@ cd package && dart run example/z_pong.dart
 
 # Measure round-trip latency (requires z_pong running; PAYLOAD_SIZE in bytes)
 cd package && dart run example/z_ping.dart 64 -n 100 -w 1000
+
+# Measure round-trip latency with SHM zero-copy (requires z_pong running)
+cd package && dart run example/z_ping_shm.dart 64 -n 100 -w 1000
+
+# Tight-loop throughput publisher (heap; requires z_sub_thr in another terminal)
+cd package && dart run example/z_pub_thr.dart 8192 --express
+
+# Background subscriber counting throughput rounds (reports msg/s)
+cd package && dart run example/z_sub_thr.dart -s 10 -n 100000
+
+# Tight-loop SHM throughput publisher (zero-copy; requires z_sub_thr)
+cd package && dart run example/z_pub_shm_thr.dart 8192
+
+# Serialization round-trip demo (no network)
+cd package && dart run example/z_bytes.dart
+
+# In-memory storage: subscriber stores PUT/DELETE, queryable replies (runs until Ctrl-C)
+cd package && dart run example/z_storage.dart -k 'demo/example/**'
+
+# Advanced publisher with cache and heartbeat (runs until Ctrl-C)
+cd package && dart run example/z_advanced_pub.dart -k demo/example/zenoh-dart-advanced-pub -i 10
+
+# Advanced subscriber with history recovery and miss detection (runs until Ctrl-C)
+cd package && dart run example/z_advanced_sub.dart -k 'demo/example/**'
 ```
 
 ## Architecture
@@ -152,12 +176,21 @@ cd package && dart run example/z_ping.dart 64 -n 100 -w 1000
 
 - `Zenoh` — Static utilities: `initLog()`, `scout()`
 - `Config` — Session configuration with JSON5 insertion
-- `Session` — Open/close sessions; `put`, `putBytes`, `deleteResource`, `declareSubscriber`, `declareBackgroundSubscriber`, `declarePublisher`, `get`, `declareQueryable`, `declarePullSubscriber`, `declareQuerier`, `declareLivelinessToken`, `declareLivelinessSubscriber`, `livelinessGet`, `zid`, `routersZid()`, `peersZid()`
-- `KeyExpr` — Key expression creation and validation
-- `ZBytes` — Binary payload container; `clone()` (shallow ref-counted copy), `toBytes()` (read content as `Uint8List`), `isShmBacked` detects SHM backing
+- `Session` — Open/close sessions; `put`, `putBytes`, `deleteResource`, `declareSubscriber`, `declareBackgroundSubscriber`, `declarePublisher`, `declareAdvancedPublisher`, `declareAdvancedSubscriber`, `get`, `declareQueryable`, `declarePullSubscriber`, `declareQuerier`, `declareLivelinessToken`, `declareLivelinessSubscriber`, `livelinessGet`, `zid`, `routersZid()`, `peersZid()`
+- `KeyExpr` — Key expression creation and validation; `intersects()`, `includes()`, `equals()` matching
+- `ZBytes` — Binary payload container; `clone()` (shallow ref-counted copy), `toBytes()` (read content as `Uint8List`), `fromInt()`/`toInt()`, `fromDouble()`/`toDouble()`, `fromBool()`/`toBool()`, `slices` (lazy fragment iteration), `isShmBacked` detects SHM backing
+- `ZSerializer` — Streaming serializer for multi-value payloads (uint8–int64, float, double, bool, string, bytes, sequence length)
+- `ZDeserializer` — Type-safe streaming deserializer with `isDone` state tracking
+- `ZBytesWriter` — Raw byte assembler: `writeAll()`, `append()` (consumed), `finish()`
 - `LivelinessToken` — Announces entity presence on the network; `keyExpr`, `close()`
 - `Publisher` — Declared publisher with `put`/`putBytes`/`deleteResource`/`matchingStatus`/`isExpress` mode
+- `AdvancedPublisher` — Publisher with cache, publisher detection, and sample miss detection (requires `timestamping/enabled: true`)
+- `AdvancedPublisherOptions` — Cache size, publisher detection, miss detection, heartbeat mode/period
+- `HeartbeatMode` — Enum: `none`, `periodic`, `sporadic`
 - `Subscriber` — Callback-based subscriber delivering `Stream<Sample>`
+- `AdvancedSubscriber` — Subscriber with history recovery, late publisher detection, miss events (`stream`, `missEvents`)
+- `AdvancedSubscriberOptions` — History, recovery, miss detection, subscriber detection, miss listener
+- `MissEvent` — Missed-sample notification with source `ZenohId` and count
 - `PullSubscriber` — Ring-buffer-backed pull subscriber with `tryRecv()` (lossy, drops oldest)
 - `Querier` — Declared querier for repeated queries with `get()` -> `Stream<Reply>`, `matchingStatus`, `hasMatchingQueryables()`
 - `Query` — Received query with `reply()`/`replyBytes()`/`dispose()`, `keyExpr`, `parameters`, `payloadBytes`
@@ -166,7 +199,7 @@ cd package && dart run example/z_ping.dart 64 -n 100 -w 1000
 - `ReplyError` — Error reply with `payloadBytes`, `payload`, `encoding`
 - `QueryTarget` — Enum: `bestMatching`, `all`, `allComplete`
 - `ConsolidationMode` — Enum: `auto`, `none`, `monotonic`, `latest`
-- `Sample` — Received data with `keyExpr`, `payload`, `payloadBytes`, `kind`, `attachment`, `encoding`
+- `Sample` — Received data with `keyExpr`, `payload` (lenient UTF-8 display; invalid bytes become U+FFFD), `payloadBytes` (exact raw bytes), `kind`, `attachment`, `encoding`
 - `SampleKind` — Enum: `put`, `delete`
 - `Encoding` — MIME type wrapper with predefined constants
 - `CongestionControl` — Enum: `block`, `drop`
