@@ -88,7 +88,7 @@ void main() {
     );
   }); // AdvancedSubscriber group
 
-  group('AdvancedSubscriber Integration (TCP 17520-17523)', () {
+  group('AdvancedSubscriber Integration (TCP 17520-17523, 17525)', () {
     // --- Tests 1 & 2: live pub/sub and delete (port 17520) ---
     group('live pub/sub (port 17520)', () {
       late Session session1;
@@ -347,6 +347,51 @@ void main() {
           const Duration(seconds: 5),
         );
         expect(sample.payload, equals('binary data'));
+
+        subscriber.close();
+        publisher.close();
+      } finally {
+        session1.close();
+        session2.close();
+      }
+    });
+    // --- Test 6: binary payload delivery (port 17525) ---
+    test('AdvancedPublisher binary putBytes delivered faithfully', () async {
+      final config1 = Config();
+      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17525"]');
+      config1.insertJson5('timestamping/enabled', 'true');
+      final session1 = Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config();
+      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17525"]');
+      final session2 = Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      try {
+        final publisher = session1.declareAdvancedPublisher(
+          'zenoh/dart/test/adv-int/binary',
+          options: AdvancedPublisherOptions(
+            cacheMaxSamples: 5,
+            publisherDetection: true,
+          ),
+        );
+
+        final subscriber = session2.declareAdvancedSubscriber(
+          'zenoh/dart/test/adv-int/binary',
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        final binary = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+        publisher.putBytes(ZBytes.fromUint8List(binary));
+
+        final sample = await subscriber.stream.first.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(sample.payloadBytes, equals([0x00, 0xFF, 0xFE, 0x80, 0x41]));
 
         subscriber.close();
         publisher.close();

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:zenoh/zenoh.dart';
@@ -135,6 +137,61 @@ void main() {
       // Next tryRecv should return null
       expect(pullSub.tryRecv(), isNull);
     });
+
+    test('tryRecv returns binary payload faithfully', () async {
+      final pullSub = session2.declarePullSubscriber(
+        'zenoh/dart/test/pull/binary-rt',
+      );
+      addTearDown(pullSub.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final binary = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+      session1.putBytes(
+        'zenoh/dart/test/pull/binary-rt',
+        ZBytes.fromUint8List(binary),
+      );
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final sample = pullSub.tryRecv();
+      expect(sample, isNotNull);
+      expect(sample!.payloadBytes, equals([0x00, 0xFF, 0xFE, 0x80, 0x41]));
+      expect(sample.payload, contains('\u{FFFD}'));
+    });
+
+    test('tryRecv returns binary attachment without corruption', () async {
+      final pullSub = session2.declarePullSubscriber(
+        'zenoh/dart/test/pull/binary-att',
+      );
+      addTearDown(pullSub.close);
+
+      final publisher = session1.declarePublisher(
+        'zenoh/dart/test/pull/binary-att',
+      );
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.putBytes(
+        ZBytes.fromString('valid payload'),
+        attachment: ZBytes.fromUint8List(
+          Uint8List.fromList([0xFF, 0xFE, 0x80]),
+        ),
+      );
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final sample = pullSub.tryRecv();
+      expect(sample, isNotNull);
+      expect(sample!.payloadBytes, equals(utf8.encode('valid payload')));
+      expect(sample.attachment, isNotNull);
+      expect(sample.attachment, contains('\u{FFFD}'));
+    });
+
+    // Edge case "tryRecv on empty buffer still returns null" is covered by
+    // the existing test 'tryRecv returns null when buffer is empty' in the
+    // PullSubscriber lifecycle group above.
 
     test('DELETE samples received through ring buffer', () async {
       final pullSub = session2.declarePullSubscriber(

@@ -17,7 +17,10 @@ class Sample {
   /// The key expression the sample was published on.
   final String keyExpr;
 
-  /// The payload as a UTF-8 string.
+  /// The payload as a UTF-8 string, decoded leniently.
+  ///
+  /// Malformed UTF-8 byte sequences are replaced with U+FFFD (the
+  /// replacement character). Use [payloadBytes] for the exact data.
   final String payload;
 
   /// The raw payload bytes.
@@ -26,7 +29,10 @@ class Sample {
   /// The kind of sample (put or delete).
   final SampleKind kind;
 
-  /// Optional attachment metadata as a UTF-8 string.
+  /// Optional attachment metadata as a UTF-8 string, decoded leniently.
+  ///
+  /// Malformed UTF-8 byte sequences are replaced with U+FFFD (the
+  /// replacement character).
   final String? attachment;
 
   /// The encoding of the payload as a MIME type string, or null if unknown.

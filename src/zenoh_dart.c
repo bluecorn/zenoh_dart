@@ -232,6 +232,35 @@ typedef struct {
   Dart_Port_DL dart_port;
 } zd_subscriber_context_t;
 
+/// Fills `obj` with byte-faithful Uint8 typed data extracted from `bytes`.
+///
+/// Uses z_bytes_to_slice, which flattens fragments and never validates
+/// UTF-8 — unlike z_bytes_to_string, which writes a NULL-data gravestone
+/// on invalid UTF-8 (corrupting binary payloads). Empty bytes post
+/// length=0 with a non-NULL static buffer, because Dart_PostCObject_DL
+/// rejects NULL typed-data values (delete samples must keep delivering).
+///
+/// Returns true if `slice` was created; the caller must then drop it
+/// with z_slice_drop(z_slice_move(slice)) AFTER Dart_PostCObject_DL.
+static bool _zd_bytes_to_cobject(const z_loaned_bytes_t* bytes,
+                                 Dart_CObject* obj,
+                                 z_owned_slice_t* slice) {
+  size_t len = 0;
+  const uint8_t* data = (const uint8_t*)"";
+  bool has_slice = false;
+  if (z_bytes_len(bytes) > 0 && z_bytes_to_slice(bytes, slice) == 0) {
+    has_slice = true;
+    const z_loaned_slice_t* loaned = z_slice_loan(slice);
+    len = z_slice_len(loaned);
+    data = z_slice_data(loaned);
+  }
+  obj->type = Dart_CObject_kTypedData;
+  obj->value.as_typed_data.type = Dart_TypedData_kUint8;
+  obj->value.as_typed_data.length = (intptr_t)len;
+  obj->value.as_typed_data.values = (uint8_t*)data;
+  return has_slice;
+}
+
 /// Sample callback: extracts fields and posts to Dart via native port.
 static void _zd_sample_callback(z_loaned_sample_t* sample, void* context) {
   zd_subscriber_context_t* ctx = (zd_subscriber_context_t*)context;
@@ -243,13 +272,8 @@ static void _zd_sample_callback(z_loaned_sample_t* sample, void* context) {
   size_t key_len = z_string_len(key_loaned);
   const char* key_data = z_string_data(key_loaned);
 
-  // 2. Payload as bytes
+  // 2. Payload as bytes (byte-faithful; see _zd_bytes_to_cobject)
   const z_loaned_bytes_t* payload_loaned = z_sample_payload(sample);
-  z_owned_string_t payload_str;
-  z_bytes_to_string(payload_loaned, &payload_str);
-  const z_loaned_string_t* payload_str_loaned = z_string_loan(&payload_str);
-  size_t payload_len = z_string_len(payload_str_loaned);
-  const char* payload_data = z_string_data(payload_str_loaned);
 
   // 3. Kind as int
   z_sample_kind_t kind = z_sample_kind(sample);
@@ -275,25 +299,20 @@ static void _zd_sample_callback(z_loaned_sample_t* sample, void* context) {
   c_keyexpr.value.as_string = key_buf;
 
   Dart_CObject c_payload;
-  c_payload.type = Dart_CObject_kTypedData;
-  c_payload.value.as_typed_data.type = Dart_TypedData_kUint8;
-  c_payload.value.as_typed_data.length = (intptr_t)payload_len;
-  c_payload.value.as_typed_data.values = (uint8_t*)payload_data;
+  z_owned_slice_t payload_slice;
+  bool has_payload_slice =
+      _zd_bytes_to_cobject(payload_loaned, &c_payload, &payload_slice);
 
   Dart_CObject c_kind;
   c_kind.type = Dart_CObject_kInt64;
   c_kind.value.as_int64 = (int64_t)kind;
 
   Dart_CObject c_attachment;
-  z_owned_string_t attachment_str;
-  bool has_attachment = (attachment != NULL);
-  if (has_attachment) {
-    z_bytes_to_string(attachment, &attachment_str);
-    const z_loaned_string_t* att_loaned = z_string_loan(&attachment_str);
-    c_attachment.type = Dart_CObject_kTypedData;
-    c_attachment.value.as_typed_data.type = Dart_TypedData_kUint8;
-    c_attachment.value.as_typed_data.length = (intptr_t)z_string_len(att_loaned);
-    c_attachment.value.as_typed_data.values = (uint8_t*)z_string_data(att_loaned);
+  z_owned_slice_t attachment_slice;
+  bool has_attachment_slice = false;
+  if (attachment != NULL) {
+    has_attachment_slice =
+        _zd_bytes_to_cobject(attachment, &c_attachment, &attachment_slice);
   } else {
     c_attachment.type = Dart_CObject_kNull;
   }
@@ -316,10 +335,12 @@ static void _zd_sample_callback(z_loaned_sample_t* sample, void* context) {
   // Cleanup
   free(key_buf);
   free(enc_buf);
-  z_string_drop(z_string_move(&payload_str));
+  if (has_payload_slice) {
+    z_slice_drop(z_slice_move(&payload_slice));
+  }
   z_string_drop(z_string_move(&encoding_str));
-  if (has_attachment) {
-    z_string_drop(z_string_move(&attachment_str));
+  if (has_attachment_slice) {
+    z_slice_drop(z_slice_move(&attachment_slice));
   }
 }
 
@@ -767,23 +788,15 @@ static void _zd_query_callback(z_loaned_query_t* query, void* context) {
   c_params.type = Dart_CObject_kString;
   c_params.value.as_string = params_buf;
 
+  // Payload as bytes (byte-faithful; see _zd_bytes_to_cobject). Absent or
+  // empty payloads post kNull, preserving the Dart-visible null semantics;
+  // no owned object is created in that case (no cleanup needed).
   Dart_CObject c_payload;
-  z_owned_string_t payload_str;
-  bool has_payload = (payload != NULL);
-  if (has_payload) {
-    // Check if bytes are empty
-    z_bytes_to_string(payload, &payload_str);
-    const z_loaned_string_t* pl_loaned = z_string_loan(&payload_str);
-    size_t pl_len = z_string_len(pl_loaned);
-    if (pl_len > 0) {
-      c_payload.type = Dart_CObject_kTypedData;
-      c_payload.value.as_typed_data.type = Dart_TypedData_kUint8;
-      c_payload.value.as_typed_data.length = (intptr_t)pl_len;
-      c_payload.value.as_typed_data.values = (uint8_t*)z_string_data(pl_loaned);
-    } else {
-      has_payload = false;
-      c_payload.type = Dart_CObject_kNull;
-    }
+  z_owned_slice_t payload_slice;
+  bool has_payload_slice = false;
+  if (payload != NULL && z_bytes_len(payload) > 0) {
+    has_payload_slice =
+        _zd_bytes_to_cobject(payload, &c_payload, &payload_slice);
   } else {
     c_payload.type = Dart_CObject_kNull;
   }
@@ -799,8 +812,8 @@ static void _zd_query_callback(z_loaned_query_t* query, void* context) {
   // Cleanup temporary buffers
   free(key_buf);
   free(params_buf);
-  if (has_payload) {
-    z_string_drop(z_string_move(&payload_str));
+  if (has_payload_slice) {
+    z_slice_drop(z_slice_move(&payload_slice));
   }
 }
 
@@ -885,13 +898,8 @@ static void _zd_reply_callback(z_loaned_reply_t* reply, void* context) {
     memcpy(key_buf, key_data, key_len);
     key_buf[key_len] = '\0';
 
-    // 2. Payload as bytes
+    // 2. Payload as bytes (byte-faithful; see _zd_bytes_to_cobject)
     const z_loaned_bytes_t* payload_loaned = z_sample_payload(sample);
-    z_owned_string_t payload_str;
-    z_bytes_to_string(payload_loaned, &payload_str);
-    const z_loaned_string_t* payload_str_loaned = z_string_loan(&payload_str);
-    size_t payload_len = z_string_len(payload_str_loaned);
-    const char* payload_data = z_string_data(payload_str_loaned);
 
     // 3. Kind as int
     z_sample_kind_t kind = z_sample_kind(sample);
@@ -917,25 +925,20 @@ static void _zd_reply_callback(z_loaned_reply_t* reply, void* context) {
     c_keyexpr.value.as_string = key_buf;
 
     Dart_CObject c_payload;
-    c_payload.type = Dart_CObject_kTypedData;
-    c_payload.value.as_typed_data.type = Dart_TypedData_kUint8;
-    c_payload.value.as_typed_data.length = (intptr_t)payload_len;
-    c_payload.value.as_typed_data.values = (uint8_t*)payload_data;
+    z_owned_slice_t payload_slice;
+    bool has_payload_slice =
+        _zd_bytes_to_cobject(payload_loaned, &c_payload, &payload_slice);
 
     Dart_CObject c_kind;
     c_kind.type = Dart_CObject_kInt64;
     c_kind.value.as_int64 = (int64_t)kind;
 
     Dart_CObject c_attachment;
-    z_owned_string_t attachment_str;
-    bool has_attachment = (attachment != NULL);
-    if (has_attachment) {
-      z_bytes_to_string(attachment, &attachment_str);
-      const z_loaned_string_t* att_loaned = z_string_loan(&attachment_str);
-      c_attachment.type = Dart_CObject_kTypedData;
-      c_attachment.value.as_typed_data.type = Dart_TypedData_kUint8;
-      c_attachment.value.as_typed_data.length = (intptr_t)z_string_len(att_loaned);
-      c_attachment.value.as_typed_data.values = (uint8_t*)z_string_data(att_loaned);
+    z_owned_slice_t attachment_slice;
+    bool has_attachment_slice = false;
+    if (attachment != NULL) {
+      has_attachment_slice =
+          _zd_bytes_to_cobject(attachment, &c_attachment, &attachment_slice);
     } else {
       c_attachment.type = Dart_CObject_kNull;
     }
@@ -959,22 +962,19 @@ static void _zd_reply_callback(z_loaned_reply_t* reply, void* context) {
     // Cleanup
     free(key_buf);
     free(enc_buf);
-    z_string_drop(z_string_move(&payload_str));
+    if (has_payload_slice) {
+      z_slice_drop(z_slice_move(&payload_slice));
+    }
     z_string_drop(z_string_move(&encoding_str));
-    if (has_attachment) {
-      z_string_drop(z_string_move(&attachment_str));
+    if (has_attachment_slice) {
+      z_slice_drop(z_slice_move(&attachment_slice));
     }
   } else {
     // Error reply
     const z_loaned_reply_err_t* err = z_reply_err(reply);
 
-    // Error payload as bytes
+    // Error payload as bytes (byte-faithful; see _zd_bytes_to_cobject)
     const z_loaned_bytes_t* err_payload = z_reply_err_payload(err);
-    z_owned_string_t err_payload_str;
-    z_bytes_to_string(err_payload, &err_payload_str);
-    const z_loaned_string_t* err_pl_loaned = z_string_loan(&err_payload_str);
-    size_t err_pl_len = z_string_len(err_pl_loaned);
-    const char* err_pl_data = z_string_data(err_pl_loaned);
 
     // Error encoding as string
     const z_loaned_encoding_t* err_encoding = z_reply_err_encoding(err);
@@ -989,10 +989,9 @@ static void _zd_reply_callback(z_loaned_reply_t* reply, void* context) {
     c_tag.value.as_int64 = 0;
 
     Dart_CObject c_err_payload;
-    c_err_payload.type = Dart_CObject_kTypedData;
-    c_err_payload.value.as_typed_data.type = Dart_TypedData_kUint8;
-    c_err_payload.value.as_typed_data.length = (intptr_t)err_pl_len;
-    c_err_payload.value.as_typed_data.values = (uint8_t*)err_pl_data;
+    z_owned_slice_t err_payload_slice;
+    bool has_err_payload_slice =
+        _zd_bytes_to_cobject(err_payload, &c_err_payload, &err_payload_slice);
 
     char* err_enc_buf = (char*)malloc(err_enc_len + 1);
     memcpy(err_enc_buf, err_enc_data, err_enc_len);
@@ -1011,7 +1010,9 @@ static void _zd_reply_callback(z_loaned_reply_t* reply, void* context) {
     Dart_PostCObject_DL(ctx->dart_port, &c_array);
 
     free(err_enc_buf);
-    z_string_drop(z_string_move(&err_payload_str));
+    if (has_err_payload_slice) {
+      z_slice_drop(z_slice_move(&err_payload_slice));
+    }
     z_string_drop(z_string_move(&err_enc_str));
   }
 }
@@ -1161,13 +1162,10 @@ FFI_PLUGIN_EXPORT int32_t zd_query_payload(
   if (actual_len == 0) {
     return 0;
   }
-  // Copy payload bytes
-  z_owned_string_t payload_str;
-  z_bytes_to_string(payload, &payload_str);
-  const z_loaned_string_t* pl_loaned = z_string_loan(&payload_str);
+  // Copy payload bytes via the byte-faithful reader (see zd_bytes_to_buf)
   size_t copy_len = actual_len < (size_t)max_len ? actual_len : (size_t)max_len;
-  memcpy(payload_out, z_string_data(pl_loaned), copy_len);
-  z_string_drop(z_string_move(&payload_str));
+  z_bytes_reader_t reader = z_bytes_get_reader(payload);
+  z_bytes_reader_read(&reader, payload_out, copy_len);
   return (int32_t)actual_len;
 }
 
@@ -1334,19 +1332,14 @@ FFI_PLUGIN_EXPORT int8_t zd_pull_subscriber_try_recv(
   memcpy(*out_keyexpr, key_data, key_len);
   (*out_keyexpr)[key_len] = '\0';
 
-  // 2. Payload as bytes (via string conversion, matching existing pattern)
+  // 2. Payload as bytes (byte-faithful reader pattern, per zd_bytes_to_buf)
   const z_loaned_bytes_t* payload_loaned = z_sample_payload(s);
   size_t payload_byte_len = z_bytes_len(payload_loaned);
   if (payload_byte_len > 0) {
-    z_owned_string_t payload_str;
-    z_bytes_to_string(payload_loaned, &payload_str);
-    const z_loaned_string_t* pl_loaned = z_string_loan(&payload_str);
-    size_t pl_len = z_string_len(pl_loaned);
-    const char* pl_data = z_string_data(pl_loaned);
-    *out_payload = (uint8_t*)malloc(pl_len);
-    memcpy(*out_payload, pl_data, pl_len);
-    *out_payload_len = (int32_t)pl_len;
-    z_string_drop(z_string_move(&payload_str));
+    *out_payload = (uint8_t*)malloc(payload_byte_len);
+    z_bytes_reader_t pl_reader = z_bytes_get_reader(payload_loaned);
+    z_bytes_reader_read(&pl_reader, *out_payload, payload_byte_len);
+    *out_payload_len = (int32_t)payload_byte_len;
   } else {
     *out_payload = NULL;
     *out_payload_len = 0;
@@ -1371,18 +1364,14 @@ FFI_PLUGIN_EXPORT int8_t zd_pull_subscriber_try_recv(
   }
   z_string_drop(z_string_move(&enc_str));
 
-  // 5. Attachment (nullable)
+  // 5. Attachment (nullable; byte-faithful reader pattern)
   const z_loaned_bytes_t* attachment = z_sample_attachment(s);
   if (attachment != NULL) {
-    z_owned_string_t att_str;
-    z_bytes_to_string(attachment, &att_str);
-    const z_loaned_string_t* att_loaned = z_string_loan(&att_str);
-    size_t att_len = z_string_len(att_loaned);
-    const char* att_data = z_string_data(att_loaned);
+    size_t att_len = z_bytes_len(attachment);
     *out_attachment = (uint8_t*)malloc(att_len);
-    memcpy(*out_attachment, att_data, att_len);
+    z_bytes_reader_t att_reader = z_bytes_get_reader(attachment);
+    z_bytes_reader_read(&att_reader, *out_attachment, att_len);
     *out_attachment_len = (int32_t)att_len;
-    z_string_drop(z_string_move(&att_str));
   } else {
     *out_attachment = NULL;
     *out_attachment_len = 0;

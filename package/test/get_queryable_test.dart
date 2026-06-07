@@ -250,6 +250,118 @@ void main() {
         equals(Uint8List.fromList([0xDE, 0xAD])),
       );
     });
+
+    test('delivers invalid-UTF-8 binary reply payload faithfully', () async {
+      final queryable = sessionA.declareQueryable('zenoh/dart/test/q/binreply');
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        query.replyBytes(
+          'zenoh/dart/test/q/binreply',
+          ZBytes.fromUint8List(
+            Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+          ),
+        );
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final replies = await sessionB.get('zenoh/dart/test/q/binreply').toList();
+
+      expect(replies, hasLength(1));
+      expect(replies.first.isOk, isTrue);
+      expect(
+        replies.first.ok.payloadBytes,
+        equals([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+      );
+      expect(replies.first.ok.payload, contains('\u{FFFD}'));
+    });
+
+    test('empty reply payload still delivers', () async {
+      final queryable = sessionA.declareQueryable(
+        'zenoh/dart/test/q/emptyreply',
+      );
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        query.replyBytes(
+          'zenoh/dart/test/q/emptyreply',
+          ZBytes.fromUint8List(Uint8List(0)),
+        );
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final replies = await sessionB
+          .get('zenoh/dart/test/q/emptyreply')
+          .toList();
+
+      expect(replies, hasLength(1));
+      expect(replies.first.isOk, isTrue);
+      expect(replies.first.ok.payloadBytes, isEmpty);
+      expect(replies.first.ok.payload, equals(''));
+    });
+
+    test(
+      'queryable receives invalid-UTF-8 binary query payload faithfully',
+      () async {
+        final receivedPayload = Completer<Uint8List?>();
+        final queryable = sessionA.declareQueryable(
+          'zenoh/dart/test/q/binquery',
+        );
+        addTearDown(queryable.close);
+
+        queryable.stream.listen((query) {
+          receivedPayload.complete(query.payloadBytes);
+          query.reply('zenoh/dart/test/q/binquery', 'ok');
+          query.dispose();
+        });
+
+        await Future.delayed(Duration(milliseconds: 200));
+
+        final zbytes = ZBytes.fromUint8List(
+          Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+        );
+
+        await sessionB
+            .get('zenoh/dart/test/q/binquery', payload: zbytes)
+            .toList();
+
+        final payload = await receivedPayload.future.timeout(
+          Duration(seconds: 5),
+        );
+        expect(payload, isNotNull);
+        expect(payload, equals([0x00, 0xFF, 0xFE, 0x80, 0x41]));
+      },
+    );
+
+    test(
+      'query with no payload still delivers with null payloadBytes',
+      () async {
+        final receivedPayload = Completer<Uint8List?>();
+        final queryable = sessionA.declareQueryable(
+          'zenoh/dart/test/q/nopayload',
+        );
+        addTearDown(queryable.close);
+
+        queryable.stream.listen((query) {
+          receivedPayload.complete(query.payloadBytes);
+          query.reply('zenoh/dart/test/q/nopayload', 'ok');
+          query.dispose();
+        });
+
+        await Future.delayed(Duration(milliseconds: 200));
+
+        await sessionB.get('zenoh/dart/test/q/nopayload').toList();
+
+        final payload = await receivedPayload.future.timeout(
+          Duration(seconds: 5),
+        );
+        expect(payload, isNull);
+      },
+    );
   });
 
   group('Phase 7: Session.get with ZBytes payload (TCP 17472)', () {

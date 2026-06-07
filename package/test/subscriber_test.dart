@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:zenoh/src/bytes.dart';
+import 'package:zenoh/src/bytes_writer.dart';
 import 'package:zenoh/src/config.dart';
 import 'package:zenoh/src/exceptions.dart';
 import 'package:zenoh/src/sample.dart';
@@ -515,7 +516,7 @@ void main() {
       expect(sample.payloadBytes, equals(utf8.encode('hello world')));
     });
 
-    test('delivers payloadBytes for binary data via putBytes', () async {
+    test('delivers invalid-UTF-8 binary payload faithfully', () async {
       final subscriber = session2.declareSubscriber(
         'zenoh/dart/test/binary-rt',
       );
@@ -523,17 +524,115 @@ void main() {
 
       await Future<void>.delayed(const Duration(seconds: 1));
 
+      final binary = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
       session1.putBytes(
         'zenoh/dart/test/binary-rt',
-        ZBytes.fromString('binary test'),
+        ZBytes.fromUint8List(binary),
       );
 
       final sample = await subscriber.stream.first.timeout(
         const Duration(seconds: 5),
       );
 
-      expect(sample.payload, equals('binary test'));
-      expect(sample.payloadBytes, equals(utf8.encode('binary test')));
+      expect(sample.payloadBytes, equals([0x00, 0xFF, 0xFE, 0x80, 0x41]));
+      expect(sample.payload, contains('\u{FFFD}'));
+    });
+
+    test('delivers float64-LE payload faithfully', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/float64-le',
+      );
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final byteData = ByteData(8)..setFloat64(0, 0.25, Endian.little);
+      final binary = byteData.buffer.asUint8List();
+      session1.putBytes(
+        'zenoh/dart/test/float64-le',
+        ZBytes.fromUint8List(binary),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.payloadBytes, equals(binary));
+      final received = ByteData.sublistView(sample.payloadBytes);
+      expect(received.getFloat64(0, Endian.little), equals(0.25));
+    });
+
+    test('binary attachment does not drop the carrying sample', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/binary-att',
+      );
+      addTearDown(subscriber.close);
+
+      final publisher = session1.declarePublisher('zenoh/dart/test/binary-att');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.putBytes(
+        ZBytes.fromString('valid payload'),
+        attachment: ZBytes.fromUint8List(
+          Uint8List.fromList([0xFF, 0xFE, 0x80]),
+        ),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.payloadBytes, equals(utf8.encode('valid payload')));
+      expect(sample.attachment, isNotNull);
+      expect(sample.attachment, contains('\u{FFFD}'));
+    });
+
+    test(
+      'multi-fragment binary payload delivers flattened and exact',
+      () async {
+        final subscriber = session2.declareSubscriber(
+          'zenoh/dart/test/binary-frag',
+        );
+        addTearDown(subscriber.close);
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        final writer = ZBytesWriter();
+        writer.writeAll(Uint8List.fromList([0xFF, 0xFE]));
+        writer.writeAll(Uint8List.fromList([0x80, 0x41]));
+        final fragmented = writer.finish();
+
+        session1.putBytes('zenoh/dart/test/binary-frag', fragmented);
+
+        final sample = await subscriber.stream.first.timeout(
+          const Duration(seconds: 5),
+        );
+
+        expect(sample.payloadBytes, equals([0xFF, 0xFE, 0x80, 0x41]));
+      },
+    );
+
+    test('empty ZBytes payload still delivers', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/binary-empty',
+      );
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      session1.putBytes(
+        'zenoh/dart/test/binary-empty',
+        ZBytes.fromUint8List(Uint8List(0)),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.payloadBytes, hasLength(0));
+      expect(sample.payload, equals(''));
     });
 
     test('delivers empty payloadBytes for delete samples', () async {
@@ -640,6 +739,25 @@ void main() {
         expect(samples[0].payload, equals('first'));
         expect(samples[1].payload, equals('second'));
         expect(samples[2].payload, equals('third'));
+      });
+
+      test('delivers invalid-UTF-8 binary payload faithfully', () async {
+        final stream = session2.declareBackgroundSubscriber(
+          'zenoh/dart/test/bg-binary',
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        final binary = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+        session1.putBytes(
+          'zenoh/dart/test/bg-binary',
+          ZBytes.fromUint8List(binary),
+        );
+
+        final sample = await stream.first.timeout(const Duration(seconds: 5));
+
+        expect(sample.payloadBytes, equals([0x00, 0xFF, 0xFE, 0x80, 0x41]));
+        expect(sample.payload, contains('\u{FFFD}'));
       });
 
       test('receives wildcard-matched samples', () async {

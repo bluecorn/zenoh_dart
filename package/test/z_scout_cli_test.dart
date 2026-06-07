@@ -6,7 +6,7 @@ void main() {
   // Get the package root (where pubspec.yaml lives)
   // Tests run from package/
   final packageRoot = Directory.current.path;
-  final dartBin = '/home/hugo-bluecorn/fvm/versions/stable/bin/dart';
+  final dartBin = Platform.resolvedExecutable;
 
   group('z_scout CLI', () {
     Future<ProcessResult> runZScout([List<String> args = const []]) async {

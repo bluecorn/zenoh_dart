@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 /// The FVM-resolved Dart executable path.
-const _dartExe = '/home/hugo-bluecorn/fvm/versions/stable/bin/dart';
+final _dartExe = Platform.resolvedExecutable;
 
 void main() {
   final packageRoot = Directory.current.path;

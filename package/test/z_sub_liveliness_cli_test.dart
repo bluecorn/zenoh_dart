@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 /// FVM-resolved Dart executable path for CLI process tests.
-const _dartExe = '/home/hugo-bluecorn/fvm/versions/stable/bin/dart';
+final _dartExe = Platform.resolvedExecutable;
 
 /// Forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
 Future<void> forceKill(Process process) async {

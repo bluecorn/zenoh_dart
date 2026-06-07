@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.18.1 — Binary Payload Delivery Fix
+
+- **Fixed: binary payload corruption on every receive surface** — invalid-UTF-8 payloads (protobuf, flatbuffers, raw binary) were silently corrupted in transit to Dart: samples and replies arrived with `payloadBytes` emptied, and query payloads arrived nulled. Affected subscriber (all variants), `Session.get` and `Querier.get` replies, queryable `Query.payloadBytes`, and `PullSubscriber.tryRecv()`
+- Root cause: the C shim flattened payloads through `z_bytes_to_string` (UTF-8-validating); callbacks now extract via `z_bytes_to_slice` (byte-faithful, flattens fragmented payloads) and sync extractors use the `z_bytes_reader` pattern
+- Binary attachments no longer corrupt the carrying sample; `attachment` arrives as a lossy display string
+- `payload`/`attachment` strings now decode leniently (`allowMalformed: true`, U+FFFD for invalid sequences) — `payloadBytes` remains the exact ground truth; valid-UTF-8 behavior byte-identical
+- Empty-payload owned-string leak in the query callback eliminated; latent memcpy UB in `zd_query_payload` removed
+- CLI test portability: stale hardcoded dart interpreter path replaced with `Platform.resolvedExecutable` (22 files)
+- 13 new integration tests (512 → 525 total); no new public API, no exported C signature changes (155 shim functions unchanged)
+
 ## 0.18.0 — Phase 18: Advanced Pub/Sub
 
 - `AdvancedPublisher`: publisher with cache, publisher detection, and sample miss detection

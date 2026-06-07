@@ -663,11 +663,11 @@ class Session {
 
           final sample = Sample(
             keyExpr: keyExpr,
-            payload: utf8.decode(payloadBytes),
+            payload: utf8.decode(payloadBytes, allowMalformed: true),
             payloadBytes: payloadBytes,
             kind: kind == 0 ? SampleKind.put : SampleKind.delete,
             attachment: attachmentBytes != null
-                ? utf8.decode(attachmentBytes)
+                ? utf8.decode(attachmentBytes, allowMalformed: true)
                 : null,
             encoding: encodingStr,
           );
@@ -680,7 +680,7 @@ class Session {
 
           final replyError = ReplyError(
             payloadBytes: errorPayloadBytes,
-            payload: utf8.decode(errorPayloadBytes),
+            payload: utf8.decode(errorPayloadBytes, allowMalformed: true),
             encoding: errorEncoding,
           );
           controller.add(Reply.error(replyError));

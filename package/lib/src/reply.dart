@@ -4,10 +4,14 @@ import 'sample.dart';
 
 /// An error payload returned by a queryable instead of a successful reply.
 class ReplyError {
-  /// The raw error payload bytes.
+  /// The raw error payload bytes (exact, byte-faithful).
   final Uint8List payloadBytes;
 
-  /// The error payload as a UTF-8 string.
+  /// The error payload decoded as a UTF-8 string for display.
+  ///
+  /// Decoding is lenient: invalid UTF-8 sequences are replaced with
+  /// U+FFFD (the replacement character). Use [payloadBytes] for the
+  /// exact bytes.
   final String payload;
 
   /// The encoding of the error payload, or null if unspecified.

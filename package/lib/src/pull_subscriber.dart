@@ -71,7 +71,7 @@ class PullSubscriber {
       String payloadStr;
       if (payloadLen > 0 && payloadPtr != nullptr) {
         payloadBytes = Uint8List.fromList(payloadPtr.asTypedList(payloadLen));
-        payloadStr = utf8.decode(payloadBytes);
+        payloadStr = utf8.decode(payloadBytes, allowMalformed: true);
       } else {
         payloadBytes = Uint8List(0);
         payloadStr = '';
@@ -92,7 +92,7 @@ class PullSubscriber {
         final attachmentBytes = Uint8List.fromList(
           attachmentPtr.asTypedList(attachmentLen),
         );
-        attachmentStr = utf8.decode(attachmentBytes);
+        attachmentStr = utf8.decode(attachmentBytes, allowMalformed: true);
       }
 
       // Free all malloc'd C buffers (allocated by C malloc)

@@ -200,6 +200,44 @@ void main() {
       }
     });
 
+    test(
+      'querier delivers invalid-UTF-8 binary reply payload faithfully',
+      () async {
+        final queryable = sessionA.declareQueryable(
+          'zenoh/dart/test/qr/binreply',
+        );
+        addTearDown(queryable.close);
+
+        queryable.stream.listen((query) {
+          query.replyBytes(
+            'zenoh/dart/test/qr/binreply',
+            ZBytes.fromUint8List(
+              Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+            ),
+          );
+          query.dispose();
+        });
+
+        await Future.delayed(Duration(milliseconds: 200));
+
+        final querier = sessionB.declareQuerier(
+          'zenoh/dart/test/qr/binreply',
+          timeout: Duration(seconds: 5),
+        );
+        addTearDown(querier.close);
+
+        final replies = await querier.get().toList();
+
+        expect(replies, hasLength(1));
+        expect(replies.first.isOk, isTrue);
+        expect(
+          replies.first.ok.payloadBytes,
+          equals([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+        );
+        expect(replies.first.ok.payload, contains('\u{FFFD}'));
+      },
+    );
+
     test('querier get after close throws StateError', () {
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/closed',
