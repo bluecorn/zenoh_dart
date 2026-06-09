@@ -109,9 +109,19 @@ class Querier {
   /// Optional [parameters] are passed as query parameters.
   /// Optional [payload] is consumed (ownership transferred to zenoh-c).
   /// Optional [encoding] specifies the payload encoding.
+  /// Optional [attachment] is consumed (ownership transferred to zenoh-c).
+  ///
+  /// [payload], [encoding], and [attachment] are per-query options (they vary
+  /// per [get] call), unlike the declaration-time options (target,
+  /// consolidation, timeout) fixed at [Session.declareQuerier].
   ///
   /// Throws [StateError] if the querier has been closed.
-  Stream<Reply> get({String? parameters, ZBytes? payload, Encoding? encoding}) {
+  Stream<Reply> get({
+    String? parameters,
+    ZBytes? payload,
+    Encoding? encoding,
+    ZBytes? attachment,
+  }) {
     if (_closed) throw StateError('Querier is closed');
 
     final controller = StreamController<Reply>();
@@ -140,6 +150,7 @@ class Querier {
             attachment: attachmentBytes != null
                 ? utf8.decode(attachmentBytes, allowMalformed: true)
                 : null,
+            attachmentBytes: attachmentBytes,
             encoding: encodingStr,
           );
           controller.add(Reply.ok(sample));
@@ -177,17 +188,28 @@ class Querier {
         receivePort.sendPort.nativePort,
         payload != null ? payload.nativePtr.cast() : nullptr,
         encoding != null ? encodingNative.cast() : nullptr,
+        attachment != null ? attachment.nativePtr.cast() : nullptr,
       );
+
+      // Mark payload + attachment ZBytes as consumed UNCONDITIONALLY:
+      // zd_querier_get moves them into zenoh-c regardless of the return code
+      // (and its encoding-error early-return drops the already-moved bytes),
+      // so the caller must not touch them after this call -- even on error.
+      // Marking before the rc-throw prevents a later use-after-move.
+      // (Querier.get has no per-get selector to pre-validate: the keyexpr was
+      // validated at declaration, so every reachable error path here is
+      // post-move.)
+      if (payload != null) {
+        payload.markConsumed();
+      }
+      if (attachment != null) {
+        attachment.markConsumed();
+      }
 
       if (rc != 0) {
         receivePort.close();
         controller.close();
         throw ZenohException('Querier get failed', rc);
-      }
-
-      // Mark ZBytes as consumed -- ownership transferred to zenoh-c
-      if (payload != null) {
-        payload.markConsumed();
       }
     } finally {
       if (parameters != null) calloc.free(parametersNative);

@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:test/test.dart';
 import 'package:zenoh/src/bytes.dart';
 import 'package:zenoh/src/config.dart';
+import 'package:zenoh/src/encoding.dart';
 import 'package:zenoh/src/exceptions.dart';
 import 'package:zenoh/src/id.dart';
 import 'package:zenoh/src/session.dart';
@@ -348,6 +352,154 @@ void main() {
 
     test('two connected sessions have different ZIDs', () {
       expect(session1.zid, isNot(equals(session2.zid)));
+    });
+  });
+
+  group('Session put attachment + encoding (send)', () {
+    late Session session1;
+    late Session session2;
+
+    setUpAll(() async {
+      final config1 = Config();
+      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17470"]');
+      session1 = Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config();
+      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17470"]');
+      session2 = Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+    });
+
+    tearDownAll(() {
+      session2.close();
+      session1.close();
+    });
+
+    test('putBytes delivers binary attachment byte-exact', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/put/bin-att');
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final payload = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+      session1.putBytes(
+        'zenoh/dart/put/bin-att',
+        ZBytes.fromUint8List(payload),
+        attachment: ZBytes.fromUint8List(
+          Uint8List.fromList([0xFF, 0xFE, 0x80]),
+        ),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.payloadBytes, equals(payload));
+      expect(sample.attachmentBytes, equals([0xFF, 0xFE, 0x80]));
+    });
+
+    test('put sets encoding received faithfully', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/put/enc');
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      session1.put(
+        'zenoh/dart/put/enc',
+        'hello',
+        encoding: Encoding.applicationJson,
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.encoding, equals('application/json'));
+    });
+
+    test('valid custom encoding round-trips faithfully', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/put/enc-custom');
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      session1.put(
+        'zenoh/dart/put/enc-custom',
+        'hello',
+        encoding: const Encoding('application/vnd.dart.test'),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      // No silent substitution: the custom MIME survives the rc-checked path.
+      expect(sample.encoding, contains('application/vnd.dart.test'));
+    });
+
+    test('putBytes marks attachment consumed on success', () {
+      final attachment = ZBytes.fromUint8List(
+        Uint8List.fromList([0xFF, 0xFE, 0x80]),
+      );
+      session1.putBytes(
+        'zenoh/dart/put/consume',
+        ZBytes.fromString('payload'),
+        attachment: attachment,
+      );
+      // Attachment ownership moved to zenoh-c -- use-after-move must throw.
+      expect(
+        () => attachment.toBytes(),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('consumed'),
+          ),
+        ),
+      );
+    });
+
+    test('putBytes on invalid keyexpr is a pre-move early-return '
+        '(attachment NOT consumed, caller retains ownership)', () {
+      final attachment = ZBytes.fromUint8List(
+        Uint8List.fromList([0xFF, 0xFE, 0x80]),
+      );
+      // An invalid key expression fails in the KeyExpr constructor BEFORE
+      // zd_put runs, so z_bytes_move never gravestones the attachment.
+      // Per the markConsumed discipline, a genuine pre-move early-return
+      // must NOT mark consumed -- the caller still owns the ZBytes.
+      expect(
+        () => session1.putBytes(
+          '',
+          ZBytes.fromString('payload'),
+          attachment: attachment,
+        ),
+        throwsA(isA<ZenohException>()),
+      );
+      // Still owned: reading and disposing it must succeed (no use-after-move).
+      expect(attachment.toBytes(), equals([0xFF, 0xFE, 0x80]));
+      attachment.dispose();
+    });
+
+    test('absent attachment/encoding behaves as before', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/put/absent');
+      addTearDown(subscriber.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      session1.put('zenoh/dart/put/absent', 'plain');
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.payloadBytes, equals(utf8.encode('plain')));
+      expect(sample.attachmentBytes, isNull);
+      // Default encoding still present (existing behavior unchanged).
+      expect(sample.encoding, isNotNull);
     });
   });
 }

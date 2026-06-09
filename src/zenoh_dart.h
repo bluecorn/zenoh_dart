@@ -315,17 +315,23 @@ FFI_PLUGIN_EXPORT size_t zd_view_string_len(const z_view_string_t* str);
 
 /// Publishes data on the given key expression.
 ///
-/// The payload is consumed (moved) by this call -- the caller must not
-/// use the owned bytes after calling zd_put.
+/// The payload and attachment are consumed (moved) by this call -- the
+/// caller must not use the owned bytes after calling zd_put, regardless
+/// of the return code (z_bytes_move gravestones them either way).
 ///
-/// @param session  Const pointer to a loaned session.
-/// @param keyexpr  Const pointer to a loaned key expression.
-/// @param payload  Pointer to an owned bytes (consumed via z_bytes_move).
+/// @param session     Const pointer to a loaned session.
+/// @param keyexpr     Const pointer to a loaned key expression.
+/// @param payload     Pointer to an owned bytes (consumed via z_bytes_move).
+/// @param encoding    Optional MIME-type string, or NULL for the default.
+/// @param attachment  Optional owned bytes (consumed via z_bytes_move),
+///                    or NULL for no attachment.
 /// @return 0 on success, negative on failure.
 FFI_PLUGIN_EXPORT int zd_put(
     const z_loaned_session_t* session,
     const z_loaned_keyexpr_t* keyexpr,
-    z_owned_bytes_t* payload);
+    z_owned_bytes_t* payload,
+    const char* encoding,
+    z_owned_bytes_t* attachment);
 
 /// Deletes a resource on the given key expression.
 ///
@@ -580,6 +586,8 @@ FFI_PLUGIN_EXPORT void zd_queryable_drop(uint8_t* queryable);
 /// @param encoding       MIME type string (NULL = default).
 /// @param timeout_ms     Timeout in milliseconds.
 /// @param parameters     Additional query parameters (NULL = none).
+/// @param attachment     Pointer to z_owned_bytes_t (NULL = no attachment).
+///                       Consumed via z_bytes_move if non-NULL.
 /// @return 0 on success, negative on failure.
 FFI_PLUGIN_EXPORT int8_t zd_get(
     const uint8_t* session,
@@ -590,7 +598,8 @@ FFI_PLUGIN_EXPORT int8_t zd_get(
     uint8_t* payload,
     const char* encoding,
     uint64_t timeout_ms,
-    const char* parameters);
+    const char* parameters,
+    uint8_t* attachment);
 
 /// Sends a reply to a query.
 ///
@@ -598,10 +607,28 @@ FFI_PLUGIN_EXPORT int8_t zd_get(
 /// @param key_expr     Null-terminated key expression string.
 /// @param payload      Pointer to z_owned_bytes_t (consumed via z_bytes_move).
 /// @param encoding     MIME type string (NULL = default).
+/// @param attachment   Pointer to z_owned_bytes_t (NULL = no attachment).
+///                     Consumed via z_bytes_move if non-NULL.
 /// @return 0 on success, negative on failure.
 FFI_PLUGIN_EXPORT int8_t zd_query_reply(
     const uint8_t* query,
     const char* key_expr,
+    uint8_t* payload,
+    const char* encoding,
+    uint8_t* attachment);
+
+/// Sends an error reply to a query.
+///
+/// Mirrors z_query_reply_err: error replies carry a payload + encoding only.
+/// There is NO key expression and NO attachment (unanimous oracle carve-out:
+/// z_query_reply_err_options_t exposes only `encoding`).
+///
+/// @param query        Const pointer to a loaned query (as uint8_t*).
+/// @param payload      Pointer to z_owned_bytes_t (consumed via z_bytes_move).
+/// @param encoding     MIME type string (NULL = default).
+/// @return 0 on success, negative on failure.
+FFI_PLUGIN_EXPORT int8_t zd_query_reply_err(
+    const uint8_t* query,
     uint8_t* payload,
     const char* encoding);
 
@@ -798,10 +825,12 @@ FFI_PLUGIN_EXPORT void zd_querier_drop(uint8_t* querier);
 /// @param port        Dart NativePort for reply callbacks.
 /// @param payload     Optional z_owned_bytes_t* (consumed if non-NULL).
 /// @param encoding    Optional encoding string (NULL for none).
+/// @param attachment  Optional z_owned_bytes_t* (consumed if non-NULL).
 /// @return 0 on success, negative on failure.
 FFI_PLUGIN_EXPORT int8_t zd_querier_get(
     const uint8_t* querier, const char* parameters,
-    int64_t port, uint8_t* payload, const char* encoding);
+    int64_t port, uint8_t* payload, const char* encoding,
+    uint8_t* attachment);
 
 /// Declares a background matching listener for a querier.
 ///
@@ -1129,7 +1158,9 @@ FFI_PLUGIN_EXPORT int zd_declare_advanced_publisher(
 /// Publishes data through the advanced publisher.
 FFI_PLUGIN_EXPORT int zd_advanced_publisher_put(
     const ze_loaned_advanced_publisher_t* publisher,
-    z_owned_bytes_t* payload);
+    z_owned_bytes_t* payload,
+    const char* encoding,
+    z_owned_bytes_t* attachment);
 
 /// Sends a DELETE through the advanced publisher.
 FFI_PLUGIN_EXPORT int zd_advanced_publisher_delete(

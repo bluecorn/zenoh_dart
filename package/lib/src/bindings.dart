@@ -691,19 +691,25 @@ class ZenohDartBindings {
 
   /// Publishes data on the given key expression.
   ///
-  /// The payload is consumed (moved) by this call -- the caller must not
-  /// use the owned bytes after calling zd_put.
+  /// The payload and attachment are consumed (moved) by this call -- the
+  /// caller must not use the owned bytes after calling zd_put, regardless
+  /// of the return code (z_bytes_move gravestones them either way).
   ///
-  /// @param session  Const pointer to a loaned session.
-  /// @param keyexpr  Const pointer to a loaned key expression.
-  /// @param payload  Pointer to an owned bytes (consumed via z_bytes_move).
+  /// @param session     Const pointer to a loaned session.
+  /// @param keyexpr     Const pointer to a loaned key expression.
+  /// @param payload     Pointer to an owned bytes (consumed via z_bytes_move).
+  /// @param encoding    Optional MIME-type string, or NULL for the default.
+  /// @param attachment  Optional owned bytes (consumed via z_bytes_move),
+  /// or NULL for no attachment.
   /// @return 0 on success, negative on failure.
   int zd_put(
     ffi.Pointer<ffi.Opaque> session,
     ffi.Pointer<ffi.Opaque> keyexpr,
     ffi.Pointer<ffi.Opaque> payload,
+    ffi.Pointer<ffi.Char> encoding,
+    ffi.Pointer<ffi.Opaque> attachment,
   ) {
-    return _zd_put(session, keyexpr, payload);
+    return _zd_put(session, keyexpr, payload, encoding, attachment);
   }
 
   late final _zd_putPtr =
@@ -713,6 +719,8 @@ class ZenohDartBindings {
             ffi.Pointer<ffi.Opaque>,
             ffi.Pointer<ffi.Opaque>,
             ffi.Pointer<ffi.Opaque>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Opaque>,
           )
         >
       >('zd_put');
@@ -721,6 +729,8 @@ class ZenohDartBindings {
         int Function(
           ffi.Pointer<ffi.Opaque>,
           ffi.Pointer<ffi.Opaque>,
+          ffi.Pointer<ffi.Opaque>,
+          ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Opaque>,
         )
       >();
@@ -1318,6 +1328,8 @@ class ZenohDartBindings {
   /// @param encoding       MIME type string (NULL = default).
   /// @param timeout_ms     Timeout in milliseconds.
   /// @param parameters     Additional query parameters (NULL = none).
+  /// @param attachment     Pointer to z_owned_bytes_t (NULL = no attachment).
+  /// Consumed via z_bytes_move if non-NULL.
   /// @return 0 on success, negative on failure.
   int zd_get(
     ffi.Pointer<ffi.Uint8> session,
@@ -1329,6 +1341,7 @@ class ZenohDartBindings {
     ffi.Pointer<ffi.Char> encoding,
     int timeout_ms,
     ffi.Pointer<ffi.Char> parameters,
+    ffi.Pointer<ffi.Uint8> attachment,
   ) {
     return _zd_get(
       session,
@@ -1340,6 +1353,7 @@ class ZenohDartBindings {
       encoding,
       timeout_ms,
       parameters,
+      attachment,
     );
   }
 
@@ -1356,6 +1370,7 @@ class ZenohDartBindings {
             ffi.Pointer<ffi.Char>,
             ffi.Uint64,
             ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Uint8>,
           )
         >
       >('zd_get');
@@ -1371,6 +1386,7 @@ class ZenohDartBindings {
           ffi.Pointer<ffi.Char>,
           int,
           ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Uint8>,
         )
       >();
 
@@ -1380,14 +1396,17 @@ class ZenohDartBindings {
   /// @param key_expr     Null-terminated key expression string.
   /// @param payload      Pointer to z_owned_bytes_t (consumed via z_bytes_move).
   /// @param encoding     MIME type string (NULL = default).
+  /// @param attachment   Pointer to z_owned_bytes_t (NULL = no attachment).
+  /// Consumed via z_bytes_move if non-NULL.
   /// @return 0 on success, negative on failure.
   int zd_query_reply(
     ffi.Pointer<ffi.Uint8> query,
     ffi.Pointer<ffi.Char> key_expr,
     ffi.Pointer<ffi.Uint8> payload,
     ffi.Pointer<ffi.Char> encoding,
+    ffi.Pointer<ffi.Uint8> attachment,
   ) {
-    return _zd_query_reply(query, key_expr, payload, encoding);
+    return _zd_query_reply(query, key_expr, payload, encoding, attachment);
   }
 
   late final _zd_query_replyPtr =
@@ -1398,6 +1417,7 @@ class ZenohDartBindings {
             ffi.Pointer<ffi.Char>,
             ffi.Pointer<ffi.Uint8>,
             ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Uint8>,
           )
         >
       >('zd_query_reply');
@@ -1406,6 +1426,44 @@ class ZenohDartBindings {
         int Function(
           ffi.Pointer<ffi.Uint8>,
           ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Uint8>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Uint8>,
+        )
+      >();
+
+  /// Sends an error reply to a query.
+  ///
+  /// Mirrors z_query_reply_err: error replies carry a payload + encoding only.
+  /// There is NO key expression and NO attachment (unanimous oracle carve-out:
+  /// z_query_reply_err_options_t exposes only `encoding`).
+  ///
+  /// @param query        Const pointer to a loaned query (as uint8_t*).
+  /// @param payload      Pointer to z_owned_bytes_t (consumed via z_bytes_move).
+  /// @param encoding     MIME type string (NULL = default).
+  /// @return 0 on success, negative on failure.
+  int zd_query_reply_err(
+    ffi.Pointer<ffi.Uint8> query,
+    ffi.Pointer<ffi.Uint8> payload,
+    ffi.Pointer<ffi.Char> encoding,
+  ) {
+    return _zd_query_reply_err(query, payload, encoding);
+  }
+
+  late final _zd_query_reply_errPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int8 Function(
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('zd_query_reply_err');
+  late final _zd_query_reply_err = _zd_query_reply_errPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<ffi.Uint8>,
           ffi.Pointer<ffi.Uint8>,
           ffi.Pointer<ffi.Char>,
         )
@@ -1942,6 +2000,7 @@ class ZenohDartBindings {
   /// @param port        Dart NativePort for reply callbacks.
   /// @param payload     Optional z_owned_bytes_t* (consumed if non-NULL).
   /// @param encoding    Optional encoding string (NULL for none).
+  /// @param attachment  Optional z_owned_bytes_t* (consumed if non-NULL).
   /// @return 0 on success, negative on failure.
   int zd_querier_get(
     ffi.Pointer<ffi.Uint8> querier,
@@ -1949,8 +2008,16 @@ class ZenohDartBindings {
     int port,
     ffi.Pointer<ffi.Uint8> payload,
     ffi.Pointer<ffi.Char> encoding,
+    ffi.Pointer<ffi.Uint8> attachment,
   ) {
-    return _zd_querier_get(querier, parameters, port, payload, encoding);
+    return _zd_querier_get(
+      querier,
+      parameters,
+      port,
+      payload,
+      encoding,
+      attachment,
+    );
   }
 
   late final _zd_querier_getPtr =
@@ -1962,6 +2029,7 @@ class ZenohDartBindings {
             ffi.Int64,
             ffi.Pointer<ffi.Uint8>,
             ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Uint8>,
           )
         >
       >('zd_querier_get');
@@ -1973,6 +2041,7 @@ class ZenohDartBindings {
           int,
           ffi.Pointer<ffi.Uint8>,
           ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Uint8>,
         )
       >();
 
@@ -3243,19 +3312,31 @@ class ZenohDartBindings {
   int zd_advanced_publisher_put(
     ffi.Pointer<ffi.Opaque> publisher,
     ffi.Pointer<ffi.Opaque> payload,
+    ffi.Pointer<ffi.Char> encoding,
+    ffi.Pointer<ffi.Opaque> attachment,
   ) {
-    return _zd_advanced_publisher_put(publisher, payload);
+    return _zd_advanced_publisher_put(publisher, payload, encoding, attachment);
   }
 
   late final _zd_advanced_publisher_putPtr =
       _lookup<
         ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<ffi.Opaque>, ffi.Pointer<ffi.Opaque>)
+          ffi.Int Function(
+            ffi.Pointer<ffi.Opaque>,
+            ffi.Pointer<ffi.Opaque>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Opaque>,
+          )
         >
       >('zd_advanced_publisher_put');
   late final _zd_advanced_publisher_put = _zd_advanced_publisher_putPtr
       .asFunction<
-        int Function(ffi.Pointer<ffi.Opaque>, ffi.Pointer<ffi.Opaque>)
+        int Function(
+          ffi.Pointer<ffi.Opaque>,
+          ffi.Pointer<ffi.Opaque>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Opaque>,
+        )
       >();
 
   /// Sends a DELETE through the advanced publisher.
@@ -3460,7 +3541,7 @@ final class __pthread_mutex_s extends ffi.Struct {
   external int __spins;
 
   @ffi.Short()
-  external int __elision;
+  external int __unused;
 
   external __pthread_internal_list __list;
 }
@@ -3490,11 +3571,8 @@ final class __pthread_rwlock_arch_t extends ffi.Struct {
   @ffi.Int()
   external int __shared;
 
-  @ffi.SignedChar()
-  external int __rwelision;
-
-  @ffi.Array.multi([7])
-  external ffi.Array<ffi.UnsignedChar> __pad1;
+  @ffi.UnsignedLong()
+  external int __pad1;
 
   @ffi.UnsignedLong()
   external int __pad2;
@@ -3509,9 +3587,6 @@ final class __pthread_cond_s extends ffi.Struct {
   external __atomic_wide_counter __g1_start;
 
   @ffi.Array.multi([2])
-  external ffi.Array<ffi.UnsignedInt> __g_refs;
-
-  @ffi.Array.multi([2])
   external ffi.Array<ffi.UnsignedInt> __g_size;
 
   @ffi.UnsignedInt()
@@ -3522,6 +3597,12 @@ final class __pthread_cond_s extends ffi.Struct {
 
   @ffi.Array.multi([2])
   external ffi.Array<ffi.UnsignedInt> __g_signals;
+
+  @ffi.UnsignedInt()
+  external int __unused_initialized_1;
+
+  @ffi.UnsignedInt()
+  external int __unused_initialized_2;
 }
 
 final class pthread_mutexattr_t extends ffi.Union {

@@ -400,6 +400,206 @@ void main() {
         session2.close();
       }
     });
+    // --- Slice 4: attachment + encoding (send) ---
+    // Test 1: binary attachment byte-exact (port 17526)
+    test('AdvancedPublisher putBytes delivers binary attachment byte-exact',
+        () async {
+      final config1 = Config();
+      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17526"]');
+      config1.insertJson5('timestamping/enabled', 'true');
+      final session1 = Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config();
+      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17526"]');
+      final session2 = Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      try {
+        final publisher = session1.declareAdvancedPublisher(
+          'zenoh/dart/test/adv-int/att-bin',
+          options: AdvancedPublisherOptions(
+            cacheMaxSamples: 5,
+            publisherDetection: true,
+          ),
+        );
+
+        final subscriber = session2.declareAdvancedSubscriber(
+          'zenoh/dart/test/adv-int/att-bin',
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        publisher.putBytes(
+          ZBytes.fromString('payload'),
+          attachment: ZBytes.fromUint8List(
+            Uint8List.fromList([0xFF, 0xFE, 0x80]),
+          ),
+        );
+
+        final sample = await subscriber.stream.first.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(sample.attachmentBytes, equals([0xFF, 0xFE, 0x80]));
+
+        subscriber.close();
+        publisher.close();
+      } finally {
+        session1.close();
+        session2.close();
+      }
+    });
+
+    // Test 2: encoding received faithfully (port 17527)
+    test('AdvancedPublisher put encoding received faithfully', () async {
+      final config1 = Config();
+      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17527"]');
+      config1.insertJson5('timestamping/enabled', 'true');
+      final session1 = Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config();
+      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17527"]');
+      final session2 = Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      try {
+        final publisher = session1.declareAdvancedPublisher(
+          'zenoh/dart/test/adv-int/enc',
+          options: AdvancedPublisherOptions(
+            cacheMaxSamples: 5,
+            publisherDetection: true,
+          ),
+        );
+
+        final subscriber = session2.declareAdvancedSubscriber(
+          'zenoh/dart/test/adv-int/enc',
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        publisher.put(
+          'octet payload',
+          encoding: Encoding.applicationOctetStream,
+        );
+
+        final sample = await subscriber.stream.first.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(sample.encoding, equals('application/octet-stream'));
+
+        subscriber.close();
+        publisher.close();
+      } finally {
+        session1.close();
+        session2.close();
+      }
+    });
+
+    // Test 3 (Edge): empty vs absent advanced attachment (port 17528)
+    test('AdvancedPublisher empty attachment differs from absent', () async {
+      final config1 = Config();
+      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17528"]');
+      config1.insertJson5('timestamping/enabled', 'true');
+      final session1 = Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config();
+      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17528"]');
+      final session2 = Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      try {
+        final publisher = session1.declareAdvancedPublisher(
+          'zenoh/dart/test/adv-int/empty-absent',
+          options: AdvancedPublisherOptions(
+            cacheMaxSamples: 5,
+            publisherDetection: true,
+          ),
+        );
+
+        final subscriber = session2.declareAdvancedSubscriber(
+          'zenoh/dart/test/adv-int/empty-absent',
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        final samples = <Sample>[];
+        final sub = subscriber.stream.listen(samples.add);
+
+        // First: empty attachment (non-null, zero length).
+        publisher.putBytes(
+          ZBytes.fromString('with-empty'),
+          attachment: ZBytes.fromUint8List(Uint8List(0)),
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+
+        // Second: no attachment at all.
+        publisher.putBytes(ZBytes.fromString('no-attachment'));
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await sub.cancel();
+
+        final empty = samples.firstWhere(
+          (s) => s.payload == 'with-empty',
+        );
+        final absent = samples.firstWhere(
+          (s) => s.payload == 'no-attachment',
+        );
+
+        // Empty -> non-null empty; absent -> null.
+        expect(empty.attachmentBytes, isNotNull);
+        expect(empty.attachmentBytes, isEmpty);
+        expect(absent.attachmentBytes, isNull);
+
+        subscriber.close();
+        publisher.close();
+      } finally {
+        session1.close();
+        session2.close();
+      }
+    });
+
+    // Test 4 (Edge): attachment consumed on any rc (no network needed).
+    test('AdvancedPublisher putBytes marks attachment consumed', () {
+      final config = Config();
+      config.insertJson5('timestamping/enabled', 'true');
+      final s = Session.open(config: config);
+      try {
+        final publisher = s.declareAdvancedPublisher(
+          'zenoh/dart/test/adv-int/consume',
+          options: AdvancedPublisherOptions(publisherDetection: true),
+        );
+        final attachment = ZBytes.fromUint8List(
+          Uint8List.fromList([0xFF, 0xFE, 0x80]),
+        );
+        publisher.putBytes(
+          ZBytes.fromString('payload'),
+          attachment: attachment,
+        );
+        // Attachment ownership moved to zenoh-c -- use-after-move must throw.
+        expect(
+          () => attachment.toBytes(),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('consumed'),
+            ),
+          ),
+        );
+        publisher.close();
+      } finally {
+        s.close();
+      }
+    });
   }); // AdvancedSubscriber Integration group
 
   group('Miss Listener', () {

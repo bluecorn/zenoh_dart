@@ -160,7 +160,7 @@ void main() {
       expect(sample.payload, contains('\u{FFFD}'));
     });
 
-    test('tryRecv returns binary attachment without corruption', () async {
+    test('tryRecv returns binary attachment byte-exact', () async {
       final pullSub = session2.declarePullSubscriber(
         'zenoh/dart/test/pull/binary-att',
       );
@@ -185,8 +185,61 @@ void main() {
       final sample = pullSub.tryRecv();
       expect(sample, isNotNull);
       expect(sample!.payloadBytes, equals(utf8.encode('valid payload')));
-      expect(sample.attachment, isNotNull);
-      expect(sample.attachment, contains('\u{FFFD}'));
+      // Byte-exact recovery of the invalid-UTF-8 attachment (no U+FFFD).
+      expect(sample.attachmentBytes, equals([0xFF, 0xFE, 0x80]));
+    });
+
+    test('tryRecv reports present-but-empty attachment as non-null empty',
+        () async {
+      final pullSub = session2.declarePullSubscriber(
+        'zenoh/dart/test/pull/empty-att',
+      );
+      addTearDown(pullSub.close);
+
+      final publisher = session1.declarePublisher(
+        'zenoh/dart/test/pull/empty-att',
+      );
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      // Present but zero-length attachment.
+      publisher.putBytes(
+        ZBytes.fromString('payload'),
+        attachment: ZBytes.fromUint8List(Uint8List(0)),
+      );
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final sample = pullSub.tryRecv();
+      expect(sample, isNotNull);
+      // Empty (non-null) is distinct from absent (null) -- conflation fixed.
+      expect(sample!.attachmentBytes, isNotNull);
+      expect(sample.attachmentBytes, hasLength(0));
+    });
+
+    test('tryRecv reports absent attachment as null', () async {
+      final pullSub = session2.declarePullSubscriber(
+        'zenoh/dart/test/pull/no-att',
+      );
+      addTearDown(pullSub.close);
+
+      final publisher = session1.declarePublisher(
+        'zenoh/dart/test/pull/no-att',
+      );
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      // No attachment argument at all.
+      publisher.putBytes(ZBytes.fromString('payload'));
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final sample = pullSub.tryRecv();
+      expect(sample, isNotNull);
+      expect(sample!.attachmentBytes, isNull);
+      expect(sample.attachment, isNull);
     });
 
     // Edge case "tryRecv on empty buffer still returns null" is covered by

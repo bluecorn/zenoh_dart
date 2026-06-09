@@ -52,6 +52,7 @@ class Subscriber {
           attachment: attachmentBytes != null
               ? utf8.decode(attachmentBytes, allowMalformed: true)
               : null,
+          attachmentBytes: attachmentBytes,
           encoding: encoding,
         );
         controller.add(sample);

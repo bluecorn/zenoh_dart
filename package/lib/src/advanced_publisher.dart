@@ -3,6 +3,7 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
 import 'bytes.dart';
+import 'encoding.dart';
 import 'exceptions.dart';
 import 'native_lib.dart';
 
@@ -114,33 +115,58 @@ class AdvancedPublisher {
   }
 
   /// Publishes a string [value] through this advanced publisher.
-  void put(String value) {
+  ///
+  /// Optionally set the [encoding] (MIME type) of the message. An optional
+  /// [attachment] can be included; it is consumed by this call and must not
+  /// be reused.
+  ///
+  /// Throws [ZenohException] if the encoding is malformed or the put fails.
+  void put(String value, {Encoding? encoding, ZBytes? attachment}) {
     _ensureOpen();
     final loaned = bindings.zd_advanced_publisher_loan(_ptr.cast());
     final payload = ZBytes.fromString(value);
-    final rc = bindings.zd_advanced_publisher_put(
-      loaned,
-      payload.nativePtr.cast(),
-    );
-    payload.markConsumed();
-    if (rc != 0) {
-      throw ZenohException('AdvancedPublisher put failed', rc);
-    }
+    _put(loaned.cast(), payload, encoding, attachment);
   }
 
   /// Publishes [ZBytes] [payload] through this advanced publisher.
   ///
   /// The payload is consumed by this call and must not be reused.
-  void putBytes(ZBytes payload) {
+  /// Optionally set the [encoding] (MIME type) of the message. An optional
+  /// [attachment] can be included; it is also consumed by this call.
+  ///
+  /// Throws [ZenohException] if the encoding is malformed or the put fails.
+  void putBytes(ZBytes payload, {Encoding? encoding, ZBytes? attachment}) {
     _ensureOpen();
     final loaned = bindings.zd_advanced_publisher_loan(_ptr.cast());
-    final rc = bindings.zd_advanced_publisher_put(
-      loaned,
-      payload.nativePtr.cast(),
-    );
-    payload.markConsumed();
-    if (rc != 0) {
-      throw ZenohException('AdvancedPublisher put failed', rc);
+    _put(loaned.cast(), payload, encoding, attachment);
+  }
+
+  void _put(
+    Pointer<Void> loaned,
+    ZBytes payload,
+    Encoding? encoding,
+    ZBytes? attachment,
+  ) {
+    final attachmentPtr = attachment != null ? attachment.nativePtr : nullptr;
+    final encodingStr = encoding != null
+        ? encoding.mimeType.toNativeUtf8()
+        : nullptr;
+    try {
+      final rc = bindings.zd_advanced_publisher_put(
+        loaned.cast(),
+        payload.nativePtr.cast(),
+        encodingStr.cast(),
+        attachmentPtr.cast(),
+      );
+      // markConsumed is unconditional: z_bytes_move gravestones the owned
+      // bytes regardless of the return code.
+      payload.markConsumed();
+      if (attachment != null) attachment.markConsumed();
+      if (rc != 0) {
+        throw ZenohException('AdvancedPublisher put failed', rc);
+      }
+    } finally {
+      if (encodingStr != nullptr) malloc.free(encodingStr);
     }
   }
 

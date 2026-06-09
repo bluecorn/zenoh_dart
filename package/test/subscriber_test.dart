@@ -562,7 +562,7 @@ void main() {
       expect(received.getFloat64(0, Endian.little), equals(0.25));
     });
 
-    test('binary attachment does not drop the carrying sample', () async {
+    test('receives binary attachment byte-exact', () async {
       final subscriber = session2.declareSubscriber(
         'zenoh/dart/test/binary-att',
       );
@@ -585,8 +585,82 @@ void main() {
       );
 
       expect(sample.payloadBytes, equals(utf8.encode('valid payload')));
-      expect(sample.attachment, isNotNull);
-      expect(sample.attachment, contains('\u{FFFD}'));
+      // Byte-exact recovery of the invalid-UTF-8 attachment (no U+FFFD).
+      expect(sample.attachmentBytes, equals([0xFF, 0xFE, 0x80]));
+    });
+
+    test('receives valid-UTF-8 attachment byte-exact and as string', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/utf8-att',
+      );
+      addTearDown(subscriber.close);
+
+      final publisher = session1.declarePublisher('zenoh/dart/test/utf8-att');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      const original = 'gid:robot-42';
+      publisher.putBytes(
+        ZBytes.fromString('valid payload'),
+        attachment: ZBytes.fromUint8List(
+          Uint8List.fromList(utf8.encode(original)),
+        ),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.attachmentBytes, equals(utf8.encode(original)));
+      expect(sample.attachment, equals(original));
+    });
+
+    test('present-but-empty attachment is non-null empty', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/empty-att',
+      );
+      addTearDown(subscriber.close);
+
+      final publisher = session1.declarePublisher('zenoh/dart/test/empty-att');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.putBytes(
+        ZBytes.fromString('payload'),
+        attachment: ZBytes.fromUint8List(Uint8List(0)),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      // Empty (non-null) is distinct from absent (null).
+      expect(sample.attachmentBytes, isNotNull);
+      expect(sample.attachmentBytes, hasLength(0));
+    });
+
+    test('absent attachment is null', () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/no-att',
+      );
+      addTearDown(subscriber.close);
+
+      final publisher = session1.declarePublisher('zenoh/dart/test/no-att');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      // No attachment argument at all.
+      publisher.putBytes(ZBytes.fromString('payload'));
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.attachmentBytes, isNull);
+      expect(sample.attachment, isNull);
     });
 
     test(

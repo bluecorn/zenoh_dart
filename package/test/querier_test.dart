@@ -1,6 +1,7 @@
 // Querier lifecycle, get, and matching status tests (slices 2-4)
 // Slice 4: Querier matching status (one-shot and stream)
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -594,6 +595,298 @@ void main() {
       querier.close();
 
       await doneCompleter.future.timeout(const Duration(seconds: 5));
+    });
+  });
+
+  // Slice 7: Querier.get attachment send + payload matrix + use-after-move fix.
+  group('Querier Get Attachment Send (TCP 17494)', () {
+    late Session sessionA;
+    late Session sessionB;
+
+    setUp(() async {
+      sessionA = Session.open(
+        config: Config()
+          ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17494"]'),
+      );
+      await Future.delayed(Duration(milliseconds: 500));
+      sessionB = Session.open(
+        config: Config()
+          ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17494"]'),
+      );
+      await Future.delayed(Duration(milliseconds: 500));
+    });
+
+    tearDown(() async {
+      sessionB.close();
+      sessionA.close();
+    });
+
+    // Test 1: Querier.get delivers a binary attachment to the queryable
+    // byte-exact (incl. invalid-UTF-8 bytes).
+    test('querier get delivers binary attachment byte-exact', () async {
+      final receivedAttachment = Completer<Uint8List?>();
+      final queryable = sessionA.declareQueryable('zenoh/dart/test/qr7/attach');
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        receivedAttachment.complete(query.attachmentBytes);
+        query.reply('zenoh/dart/test/qr7/attach', 'ack');
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/qr7/attach',
+        timeout: Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      await querier
+          .get(
+            attachment: ZBytes.fromUint8List(
+              Uint8List.fromList([0xFF, 0xFE, 0x80]),
+            ),
+          )
+          .toList();
+
+      final received = await receivedAttachment.future.timeout(
+        Duration(seconds: 5),
+      );
+      expect(received, isNotNull);
+      expect(received, equals(Uint8List.fromList([0xFF, 0xFE, 0x80])));
+    });
+
+    // Test 2: Querier query payload matrix -- {valid-UTF-8, invalid-UTF-8,
+    // empty, absent} each arrives byte-exact (or null for absent).
+    test('querier query payload matrix delivers byte-exact', () async {
+      final results = <String, Uint8List?>{};
+      final completers = {
+        'valid': Completer<void>(),
+        'invalid': Completer<void>(),
+        'empty': Completer<void>(),
+        'absent': Completer<void>(),
+      };
+
+      final queryable = sessionA.declareQueryable('zenoh/dart/test/qr7/matrix');
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        final params = query.parameters;
+        results[params] = query.payloadBytes;
+        completers[params]?.complete();
+        query.reply('zenoh/dart/test/qr7/matrix', 'ack');
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/qr7/matrix',
+        timeout: Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      final validBytes = Uint8List.fromList(utf8.encode('hello'));
+      final invalidBytes = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+
+      await querier
+          .get(parameters: 'valid', payload: ZBytes.fromUint8List(validBytes))
+          .toList();
+      await querier
+          .get(
+            parameters: 'invalid',
+            payload: ZBytes.fromUint8List(invalidBytes),
+          )
+          .toList();
+      await querier
+          .get(
+            parameters: 'empty',
+            payload: ZBytes.fromUint8List(Uint8List(0)),
+          )
+          .toList();
+      await querier.get(parameters: 'absent').toList();
+
+      await Future.wait(completers.values.map((c) => c.future))
+          .timeout(Duration(seconds: 10));
+
+      expect(results['valid'], equals(validBytes));
+      expect(results['invalid'], equals(invalidBytes));
+      // empty payload -> non-null empty bytes.
+      expect(results['empty'], isNotNull);
+      expect(results['empty'], isEmpty);
+      // absent payload -> null.
+      expect(results['absent'], isNull);
+    });
+
+    // Test 3 (Edge): payload + attachment consumed (use-after-move fix).
+    //
+    // Path driven: the SUCCESS path's UNCONDITIONAL marking. This is the
+    // latent-bug fix -- the old code marked payload ONLY on success (after the
+    // rc-throw) and never marked attachment at all. zenoh-c gravestones the
+    // moves regardless of rc, so the only safe contract is: after Querier.get
+    // returns, the caller must never touch payload/attachment again.
+    //
+    // We cannot reliably drive a genuine POST-move non-zero rc here:
+    // z_encoding_from_str accepts any string as a custom encoding (it never
+    // fails for a junk MIME in zenoh-c 1.7.2), and a valid querier + reachable
+    // queryable makes z_querier_get succeed. So the post-move consumption
+    // assertion is exercised on the success path.
+    test('querier get marks payload + attachment consumed unconditionally',
+        () async {
+      final queryable = sessionA.declareQueryable(
+        'zenoh/dart/test/qr7/consume',
+      );
+      addTearDown(queryable.close);
+      queryable.stream.listen((q) {
+        q.reply('zenoh/dart/test/qr7/consume', 'ack');
+        q.dispose();
+      });
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/qr7/consume',
+        timeout: Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      final payload = ZBytes.fromUint8List(
+        Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+      );
+      final attachment = ZBytes.fromUint8List(
+        Uint8List.fromList([0xFF, 0xFE, 0x80]),
+      );
+
+      await querier.get(payload: payload, attachment: attachment).toList();
+
+      // Both moved into zenoh-c (gravestoned) -- use-after-move must throw.
+      expect(
+        () => payload.toBytes(),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('consumed'),
+          ),
+        ),
+      );
+      expect(
+        () => attachment.toBytes(),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('consumed'),
+          ),
+        ),
+      );
+    });
+
+    // Test 4 (Edge): empty vs absent attachment via the querier.
+    test('querier empty vs absent attachment', () async {
+      final results = <String, Uint8List?>{};
+      final completers = {
+        'empty': Completer<void>(),
+        'none': Completer<void>(),
+      };
+
+      final queryable = sessionA.declareQueryable(
+        'zenoh/dart/test/qr7/emptyattach',
+      );
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        results[query.parameters] = query.attachmentBytes;
+        completers[query.parameters]?.complete();
+        query.reply('zenoh/dart/test/qr7/emptyattach', 'ack');
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/qr7/emptyattach',
+        timeout: Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      await querier
+          .get(
+            parameters: 'empty',
+            attachment: ZBytes.fromUint8List(Uint8List(0)),
+          )
+          .toList();
+      await querier.get(parameters: 'none').toList();
+
+      await Future.wait(completers.values.map((c) => c.future))
+          .timeout(Duration(seconds: 10));
+
+      // empty attachment -> non-null empty bytes.
+      expect(results['empty'], isNotNull);
+      expect(results['empty'], isEmpty);
+      // absent attachment -> null.
+      expect(results['none'], isNull);
+    });
+  });
+
+  group('Slice 8: Querier receives reply-ok attachment (TCP 17495)', () {
+    late Session sessionA;
+    late Session sessionB;
+
+    setUp(() async {
+      sessionA = Session.open(
+        config: Config()
+          ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17495"]'),
+      );
+      await Future.delayed(Duration(milliseconds: 500));
+      sessionB = Session.open(
+        config: Config()
+          ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17495"]'),
+      );
+      await Future.delayed(Duration(milliseconds: 500));
+    });
+
+    tearDown(() async {
+      sessionB.close();
+      sessionA.close();
+    });
+
+    // Test 2: a queryable replies with a binary attachment; a declared querier
+    // receives it byte-exact on reply.ok.attachmentBytes.
+    test('querier receives reply-ok binary attachment byte-exact', () async {
+      final queryable = sessionA.declareQueryable('zenoh/dart/test/q8r/attach');
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        query.replyBytes(
+          'zenoh/dart/test/q8r/attach',
+          ZBytes.fromString('ok'),
+          attachment: ZBytes.fromUint8List(
+            Uint8List.fromList([0xFF, 0xFE, 0x80]),
+          ),
+        );
+        query.dispose();
+      });
+
+      await Future.delayed(Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/q8r/attach',
+        timeout: Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      final replies = await querier
+          .get()
+          .toList()
+          .timeout(Duration(seconds: 5));
+
+      expect(replies, isNotEmpty);
+      expect(replies.first.isOk, isTrue);
+      expect(
+        replies.first.ok.attachmentBytes,
+        equals(Uint8List.fromList([0xFF, 0xFE, 0x80])),
+      );
     });
   });
 }

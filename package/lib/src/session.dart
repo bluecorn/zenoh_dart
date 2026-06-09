@@ -164,19 +164,43 @@ class Session {
 
   /// Publishes a string [value] on the given [keyExpr].
   ///
-  /// Throws [ZenohException] if the key expression is invalid or the put fails.
-  /// Throws [StateError] if the session has been closed.
-  void put(String keyExpr, String value) {
+  /// Optionally set the [encoding] (MIME type) of the message. An optional
+  /// [attachment] can be included; it is consumed by this call and must not
+  /// be reused.
+  ///
+  /// Throws [ZenohException] if the key expression is invalid, the encoding
+  /// is malformed, or the put fails.
+  /// Throws [StateError] if the session has been closed, or the attachment
+  /// has been disposed or already consumed.
+  void put(
+    String keyExpr,
+    String value, {
+    Encoding? encoding,
+    ZBytes? attachment,
+  }) {
+    final attachmentPtr = attachment != null ? attachment.nativePtr : nullptr;
+    final encodingStr = encoding != null
+        ? encoding.mimeType.toNativeUtf8()
+        : nullptr;
     _withKeyExpr(keyExpr, (loanedSession, loanedKe) {
       final payload = ZBytes.fromString(value);
-      final rc = bindings.zd_put(
-        loanedSession.cast(),
-        loanedKe.cast(),
-        payload.nativePtr.cast(),
-      );
-      payload.markConsumed();
-      if (rc != 0) {
-        throw ZenohException('Put failed', rc);
+      try {
+        final rc = bindings.zd_put(
+          loanedSession.cast(),
+          loanedKe.cast(),
+          payload.nativePtr.cast(),
+          encodingStr.cast(),
+          attachmentPtr.cast(),
+        );
+        // markConsumed is unconditional: z_bytes_move gravestones the owned
+        // bytes regardless of the return code.
+        payload.markConsumed();
+        if (attachment != null) attachment.markConsumed();
+        if (rc != 0) {
+          throw ZenohException('Put failed', rc);
+        }
+      } finally {
+        if (encodingStr != nullptr) malloc.free(encodingStr);
       }
     });
   }
@@ -184,23 +208,44 @@ class Session {
   /// Publishes a [ZBytes] [payload] on the given [keyExpr].
   ///
   /// The payload is consumed by this call and must not be reused.
+  /// Optionally set the [encoding] (MIME type) of the message. An optional
+  /// [attachment] can be included; it is also consumed by this call.
   ///
-  /// Throws [ZenohException] if the key expression is invalid or the put fails.
-  /// Throws [StateError] if the session has been closed, or the payload
-  /// has been disposed or already consumed.
-  void putBytes(String keyExpr, ZBytes payload) {
+  /// Throws [ZenohException] if the key expression is invalid, the encoding
+  /// is malformed, or the put fails.
+  /// Throws [StateError] if the session has been closed, or the payload or
+  /// attachment has been disposed or already consumed.
+  void putBytes(
+    String keyExpr,
+    ZBytes payload, {
+    Encoding? encoding,
+    ZBytes? attachment,
+  }) {
     _ensureOpen();
     // Validate payload state before allocating KeyExpr
     final payloadPtr = payload.nativePtr;
+    final attachmentPtr = attachment != null ? attachment.nativePtr : nullptr;
+    final encodingStr = encoding != null
+        ? encoding.mimeType.toNativeUtf8()
+        : nullptr;
     _withKeyExpr(keyExpr, (loanedSession, loanedKe) {
-      final rc = bindings.zd_put(
-        loanedSession.cast(),
-        loanedKe.cast(),
-        payloadPtr.cast(),
-      );
-      payload.markConsumed();
-      if (rc != 0) {
-        throw ZenohException('Put failed', rc);
+      try {
+        final rc = bindings.zd_put(
+          loanedSession.cast(),
+          loanedKe.cast(),
+          payloadPtr.cast(),
+          encodingStr.cast(),
+          attachmentPtr.cast(),
+        );
+        // markConsumed is unconditional: z_bytes_move gravestones the owned
+        // bytes regardless of the return code.
+        payload.markConsumed();
+        if (attachment != null) attachment.markConsumed();
+        if (rc != 0) {
+          throw ZenohException('Put failed', rc);
+        }
+      } finally {
+        if (encodingStr != nullptr) malloc.free(encodingStr);
       }
     });
   }
@@ -573,7 +618,7 @@ class Session {
   /// or the timeout expires. The [timeout] defaults to 10 seconds.
   ///
   /// Optional [parameters] are appended to the query selector.
-  /// Optional [payload] and [encoding] attach data to the query.
+  /// Optional [payload], [encoding], and [attachment] attach data to the query.
   /// [target] controls which queryables are targeted (default: bestMatching).
   /// [consolidation] controls reply consolidation (default: auto).
   ///
@@ -583,11 +628,20 @@ class Session {
     String? parameters,
     ZBytes? payload,
     Encoding? encoding,
+    ZBytes? attachment,
     QueryTarget target = QueryTarget.bestMatching,
     ConsolidationMode consolidation = ConsolidationMode.auto,
     Duration? timeout,
   }) {
     _ensureOpen();
+
+    // Validate the selector keyexpr in Dart BEFORE any z_bytes_move. zd_get's
+    // own z_view_keyexpr_from_str is a pre-move early-return (-1), but the
+    // Dart caller cannot distinguish that rc from a post-move failure -- so we
+    // validate here to keep the markConsumed discipline correct: a genuine
+    // pre-move early-return throws here and does NOT mark payload/attachment
+    // consumed (the caller retains ownership), mirroring put/putBytes.
+    KeyExpr(selector).dispose();
 
     final (receivePort, controller) = _createReplyChannel();
     final timeoutMs = (timeout ?? const Duration(seconds: 10)).inMilliseconds;
@@ -617,18 +671,25 @@ class Session {
         encoding != null ? encodingNative.cast() : nullptr,
         timeoutMs,
         parameters != null ? parametersNative.cast() : nullptr,
+        attachment != null ? attachment.nativePtr.cast() : nullptr,
       );
+
+      // Mark payload + attachment ZBytes as consumed UNCONDITIONALLY:
+      // zd_get moves them into zenoh-c regardless of the return code (and
+      // its encoding-error early-return drops the already-moved bytes), so
+      // the caller must not touch them after this call -- even on error.
+      // Marking before the rc-throw prevents a later use-after-move.
+      if (payload != null) {
+        payload.markConsumed();
+      }
+      if (attachment != null) {
+        attachment.markConsumed();
+      }
 
       if (rc != 0) {
         receivePort.close();
         controller.close();
         throw ZenohException('Get query failed', rc);
-      }
-
-      // Mark ZBytes as consumed -- ownership transferred to zenoh-c via
-      // z_bytes_move in zd_get
-      if (payload != null) {
-        payload.markConsumed();
       }
     } finally {
       calloc.free(selectorNative);
@@ -669,6 +730,7 @@ class Session {
             attachment: attachmentBytes != null
                 ? utf8.decode(attachmentBytes, allowMalformed: true)
                 : null,
+            attachmentBytes: attachmentBytes,
             encoding: encodingStr,
           );
           controller.add(Reply.ok(sample));

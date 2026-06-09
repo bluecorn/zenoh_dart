@@ -195,6 +195,21 @@ void main() {
       expect(result, equals(data));
       zbytes.dispose();
     });
+
+    test('returns exactly the stored bytes (no garbage tail)', () {
+      // Given: a ZBytes built from invalid-UTF-8 binary [0x00,0xFF,0xFE,0x80,0x41]
+      final data = Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]);
+      final zbytes = ZBytes.fromUint8List(data);
+
+      // When: toBytes() is called
+      final result = zbytes.toBytes();
+
+      // Then: result == exactly the stored bytes (rc-checked reader; no
+      // trailing uninitialized bytes from a short read).
+      expect(result, equals(Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41])));
+      expect(result.length, equals(5));
+      zbytes.dispose();
+    });
   });
 
   group('ZBytes.clone()', () {

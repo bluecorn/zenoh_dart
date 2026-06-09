@@ -35,6 +35,14 @@ class Sample {
   /// replacement character).
   final String? attachment;
 
+  /// The raw attachment bytes, or null if no attachment was present.
+  ///
+  /// This is the exact ground truth for attachment metadata. Use
+  /// [attachment] for a lenient UTF-8 string view. A non-null empty
+  /// [Uint8List] denotes a present-but-empty attachment (distinct from
+  /// null, which denotes an absent attachment).
+  final Uint8List? attachmentBytes;
+
   /// The encoding of the payload as a MIME type string, or null if unknown.
   final String? encoding;
 
@@ -45,6 +53,7 @@ class Sample {
     required this.payloadBytes,
     required this.kind,
     this.attachment,
+    this.attachmentBytes,
     this.encoding,
   });
 }

@@ -88,8 +88,13 @@ class PullSubscriber {
       final attachmentLen = outAttachmentLen.value;
       final attachmentPtr = outAttachment.value;
       String? attachmentStr;
-      if (attachmentLen > 0 && attachmentPtr != nullptr) {
-        final attachmentBytes = Uint8List.fromList(
+      Uint8List? attachmentBytes;
+      // Empty != absent: a present-but-empty attachment comes back as a
+      // non-null pointer with len 0 (the C shim mallocs >= 1 byte so the
+      // pointer is non-null). Key on the pointer, not the length, so an empty
+      // attachment surfaces as a non-null empty Uint8List rather than null.
+      if (attachmentPtr != nullptr) {
+        attachmentBytes = Uint8List.fromList(
           attachmentPtr.asTypedList(attachmentLen),
         );
         attachmentStr = utf8.decode(attachmentBytes, allowMalformed: true);
@@ -115,6 +120,7 @@ class PullSubscriber {
         payloadBytes: payloadBytes,
         kind: kind == 0 ? SampleKind.put : SampleKind.delete,
         attachment: attachmentStr,
+        attachmentBytes: attachmentBytes,
         encoding: encodingStr,
       );
     } finally {

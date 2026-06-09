@@ -105,7 +105,14 @@ FFI_PLUGIN_EXPORT int8_t zd_bytes_to_buf(const uint8_t* bytes,
   const z_owned_bytes_t* owned = (const z_owned_bytes_t*)bytes;
   const z_loaned_bytes_t* loaned = z_bytes_loan(owned);
   z_bytes_reader_t reader = z_bytes_get_reader(loaned);
-  z_bytes_reader_read(&reader, out, (size_t)capacity);
+  // Check the reader rc: on a short read (fewer bytes than requested) the
+  // tail of `out` would otherwise stay uninitialized. Zero-fill the untouched
+  // tail so the caller never reads garbage. (No exported signature change --
+  // the int8_t return is preserved.)
+  size_t read_len = z_bytes_reader_read(&reader, out, (size_t)capacity);
+  if (read_len < (size_t)capacity) {
+    memset(out + read_len, 0, (size_t)capacity - read_len);
+  }
   return 0;
 }
 
@@ -209,9 +216,32 @@ FFI_PLUGIN_EXPORT size_t zd_view_string_len(const z_view_string_t* str) {
 FFI_PLUGIN_EXPORT int zd_put(
     const z_loaned_session_t* session,
     const z_loaned_keyexpr_t* keyexpr,
-    z_owned_bytes_t* payload) {
+    z_owned_bytes_t* payload,
+    const char* encoding,
+    z_owned_bytes_t* attachment) {
   z_put_options_t opts;
   z_put_options_default(&opts);
+
+  z_owned_encoding_t owned_encoding;
+  if (encoding != NULL) {
+    // Check the rc: do not silently substitute the default on a bad MIME.
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      // z_put will not run, so the owned payload/attachment would otherwise
+      // leak. Drop them here so this early-return matches the Dart caller's
+      // unconditional markConsumed (gravestone) and frees native memory.
+      z_bytes_drop(z_bytes_move(payload));
+      if (attachment != NULL) {
+        z_bytes_drop(z_bytes_move(attachment));
+      }
+      return enc_rc;
+    }
+    opts.encoding = z_encoding_move(&owned_encoding);
+  }
+  if (attachment != NULL) {
+    opts.attachment = z_bytes_move(attachment);
+  }
+
   return z_put(session, keyexpr, z_bytes_move(payload), &opts);
 }
 
@@ -444,7 +474,13 @@ FFI_PLUGIN_EXPORT int zd_declare_publisher(
 
   z_owned_encoding_t owned_encoding;
   if (encoding != NULL) {
-    z_encoding_from_str(&owned_encoding, encoding);
+    // Check the rc: do not silently substitute the default on a bad MIME.
+    // No payload move here (declaration-time encoding), so a simple
+    // early-return is safe.
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      return enc_rc;
+    }
     opts.encoding = z_encoding_move(&owned_encoding);
   }
   if (congestion_control >= 0) {
@@ -479,7 +515,19 @@ FFI_PLUGIN_EXPORT int zd_publisher_put(
 
   z_owned_encoding_t owned_encoding;
   if (encoding != NULL) {
-    z_encoding_from_str(&owned_encoding, encoding);
+    // Check the rc: do not silently substitute the default on a bad MIME.
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      // z_publisher_put will not run, so the owned payload/attachment would
+      // otherwise leak. Drop them here so this early-return matches the Dart
+      // caller's unconditional markConsumed (gravestone) and frees native
+      // memory. Mirrors zd_put's consume discipline.
+      z_bytes_drop(z_bytes_move(payload));
+      if (attachment != NULL) {
+        z_bytes_drop(z_bytes_move(attachment));
+      }
+      return enc_rc;
+    }
     opts.encoding = z_encoding_move(&owned_encoding);
   }
   if (attachment != NULL) {
@@ -775,7 +823,11 @@ static void _zd_query_callback(z_loaned_query_t* query, void* context) {
   // 4. Payload (nullable)
   const z_loaned_bytes_t* payload = z_query_payload(query);
 
-  // Build Dart_CObject array: [query_ptr, keyexpr, params, payload_or_null]
+  // 5. Attachment (nullable)
+  const z_loaned_bytes_t* attachment = z_query_attachment(query);
+
+  // Build Dart_CObject array:
+  //   [query_ptr, keyexpr, params, payload_or_null, attachment_or_null]
   Dart_CObject c_query_ptr;
   c_query_ptr.type = Dart_CObject_kInt64;
   c_query_ptr.value.as_int64 = (int64_t)(intptr_t)cloned;
@@ -788,23 +840,35 @@ static void _zd_query_callback(z_loaned_query_t* query, void* context) {
   c_params.type = Dart_CObject_kString;
   c_params.value.as_string = params_buf;
 
-  // Payload as bytes (byte-faithful; see _zd_bytes_to_cobject). Absent or
-  // empty payloads post kNull, preserving the Dart-visible null semantics;
-  // no owned object is created in that case (no cleanup needed).
+  // Payload as bytes (byte-faithful; see _zd_bytes_to_cobject). Empty != absent:
+  // a present payload (even zero-length) posts non-null Uint8 typed data;
+  // an absent payload (NULL) posts kNull. Mirrors _zd_sample_callback.
   Dart_CObject c_payload;
   z_owned_slice_t payload_slice;
   bool has_payload_slice = false;
-  if (payload != NULL && z_bytes_len(payload) > 0) {
+  if (payload != NULL) {
     has_payload_slice =
         _zd_bytes_to_cobject(payload, &c_payload, &payload_slice);
   } else {
     c_payload.type = Dart_CObject_kNull;
   }
 
-  Dart_CObject* elements[4] = {&c_query_ptr, &c_keyexpr, &c_params, &c_payload};
+  // Attachment as bytes (byte-faithful). Empty != absent, same discipline.
+  Dart_CObject c_attachment;
+  z_owned_slice_t attachment_slice;
+  bool has_attachment_slice = false;
+  if (attachment != NULL) {
+    has_attachment_slice =
+        _zd_bytes_to_cobject(attachment, &c_attachment, &attachment_slice);
+  } else {
+    c_attachment.type = Dart_CObject_kNull;
+  }
+
+  Dart_CObject* elements[5] = {&c_query_ptr, &c_keyexpr, &c_params, &c_payload,
+                               &c_attachment};
   Dart_CObject c_array;
   c_array.type = Dart_CObject_kArray;
-  c_array.value.as_array.length = 4;
+  c_array.value.as_array.length = 5;
   c_array.value.as_array.values = elements;
 
   Dart_PostCObject_DL(ctx->dart_port, &c_array);
@@ -814,6 +878,9 @@ static void _zd_query_callback(z_loaned_query_t* query, void* context) {
   free(params_buf);
   if (has_payload_slice) {
     z_slice_drop(z_slice_move(&payload_slice));
+  }
+  if (has_attachment_slice) {
+    z_slice_drop(z_slice_move(&attachment_slice));
   }
 }
 
@@ -1038,8 +1105,11 @@ FFI_PLUGIN_EXPORT int8_t zd_get(
     uint8_t* payload,
     const char* encoding,
     uint64_t timeout_ms,
-    const char* parameters) {
-  // Create key expression view from selector
+    const char* parameters,
+    uint8_t* attachment) {
+  // Create key expression view from selector. This is a PRE-move early-return:
+  // the payload/attachment have not been moved yet, so the Dart caller still
+  // owns them (no markConsumed on this path).
   z_view_keyexpr_t ke;
   if (z_view_keyexpr_from_str(&ke, selector) != 0) {
     return -1;
@@ -1068,11 +1138,29 @@ FFI_PLUGIN_EXPORT int8_t zd_get(
   if (payload != NULL) {
     opts.payload = z_bytes_move((z_owned_bytes_t*)payload);
   }
+  // Optional attachment (z_owned_bytes_t*, consumed via move)
+  if (attachment != NULL) {
+    opts.attachment = z_bytes_move((z_owned_bytes_t*)attachment);
+  }
 
-  // Optional encoding
+  // Optional encoding. Check the rc: do not silently substitute the default
+  // on a bad MIME. This is a POST-move early-return -- the payload/attachment
+  // are already gravestoned, so drop them and the closure here (mirroring
+  // zd_put) and return non-zero. The Dart caller's unconditional markConsumed
+  // matches: both ZBytes end up consumed on this path.
   z_owned_encoding_t owned_encoding;
   if (encoding != NULL) {
-    z_encoding_from_str(&owned_encoding, encoding);
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      if (opts.payload != NULL) {
+        z_bytes_drop(opts.payload);
+      }
+      if (opts.attachment != NULL) {
+        z_bytes_drop(opts.attachment);
+      }
+      z_closure_reply_drop(z_closure_reply_move(&callback));
+      return (int8_t)enc_rc;
+    }
     opts.encoding = z_encoding_move(&owned_encoding);
   }
 
@@ -1098,11 +1186,16 @@ FFI_PLUGIN_EXPORT int8_t zd_query_reply(
     const uint8_t* query,
     const char* key_expr,
     uint8_t* payload,
-    const char* encoding) {
+    const char* encoding,
+    uint8_t* attachment) {
   // Loan the cloned query
   const z_loaned_query_t* loaned = z_query_loan((z_owned_query_t*)query);
 
-  // Create key expression view
+  // Create key expression view. This is a PRE-move early-return: the
+  // payload/attachment have not been moved yet, so the Dart caller still
+  // owns them (no markConsumed on this path). NOTE: the Dart layer also
+  // validates the query is not disposed before calling, so the genuine
+  // pre-move failure is surfaced in Dart; this -1 is a defensive backstop.
   z_view_keyexpr_t ke;
   if (z_view_keyexpr_from_str(&ke, key_expr) != 0) {
     return -1;
@@ -1112,17 +1205,81 @@ FFI_PLUGIN_EXPORT int8_t zd_query_reply(
   z_query_reply_options_t opts;
   z_query_reply_options_default(&opts);
 
+  // Stage the payload + attachment moves up front so the encoding-error
+  // path below can drop the already-gravestoned bytes consistently
+  // (mirroring zd_get / zd_put).
+  z_moved_bytes_t* moved_payload = z_bytes_move((z_owned_bytes_t*)payload);
+  // Optional attachment (z_owned_bytes_t*, consumed via move)
+  if (attachment != NULL) {
+    opts.attachment = z_bytes_move((z_owned_bytes_t*)attachment);
+  }
+
+  // Optional encoding. Check the rc: do not silently substitute the default
+  // on a bad MIME. This is a POST-move error path -- the payload/attachment
+  // are already gravestoned, so drop them here and return non-zero. The Dart
+  // caller's unconditional post-call markConsumed matches: both ZBytes end up
+  // consumed on this path.
   z_owned_encoding_t owned_encoding;
   if (encoding != NULL) {
-    z_encoding_from_str(&owned_encoding, encoding);
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      if (moved_payload != NULL) {
+        z_bytes_drop(moved_payload);
+      }
+      if (opts.attachment != NULL) {
+        z_bytes_drop(opts.attachment);
+      }
+      return (int8_t)enc_rc;
+    }
     opts.encoding = z_encoding_move(&owned_encoding);
   }
 
   int rc = z_query_reply(
       loaned,
       z_view_keyexpr_loan(&ke),
-      z_bytes_move((z_owned_bytes_t*)payload),
+      moved_payload,
       &opts);
+
+  return (int8_t)rc;
+}
+
+// ---------------------------------------------------------------------------
+// Query error reply
+// ---------------------------------------------------------------------------
+
+FFI_PLUGIN_EXPORT int8_t zd_query_reply_err(
+    const uint8_t* query,
+    uint8_t* payload,
+    const char* encoding) {
+  // Loan the cloned query. Error replies carry NO key expression and NO
+  // attachment (z_query_reply_err_options_t has only `encoding`).
+  const z_loaned_query_t* loaned = z_query_loan((z_owned_query_t*)query);
+
+  z_query_reply_err_options_t opts;
+  z_query_reply_err_options_default(&opts);
+
+  // Stage the payload move up front so the encoding-error path below can drop
+  // the already-gravestoned bytes consistently (mirrors zd_query_reply).
+  z_moved_bytes_t* moved_payload = z_bytes_move((z_owned_bytes_t*)payload);
+
+  // Optional encoding. Check the rc: do not silently substitute the default
+  // on a bad MIME. This is a POST-move error path -- the payload is already
+  // gravestoned, so drop it here and return non-zero. The Dart caller's
+  // unconditional post-call markConsumed matches: the payload ends up consumed
+  // on this path.
+  z_owned_encoding_t owned_encoding;
+  if (encoding != NULL) {
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      if (moved_payload != NULL) {
+        z_bytes_drop(moved_payload);
+      }
+      return (int8_t)enc_rc;
+    }
+    opts.encoding = z_encoding_move(&owned_encoding);
+  }
+
+  int rc = z_query_reply_err(loaned, moved_payload, &opts);
 
   return (int8_t)rc;
 }
@@ -1155,18 +1312,23 @@ FFI_PLUGIN_EXPORT int32_t zd_query_payload(
     int32_t max_len) {
   const z_loaned_query_t* loaned = z_query_loan((z_owned_query_t*)query);
   const z_loaned_bytes_t* payload = z_query_payload(loaned);
+  // Empty != absent: an absent payload returns -1 (distinct from a
+  // present-but-empty payload, which returns 0 with no bytes written).
   if (payload == NULL) {
-    return 0;
+    return -1;
   }
   size_t actual_len = z_bytes_len(payload);
   if (actual_len == 0) {
     return 0;
   }
-  // Copy payload bytes via the byte-faithful reader (see zd_bytes_to_buf)
+  // Copy payload bytes via the byte-faithful reader. The reader returns the
+  // number of bytes actually read; on a short read (dst smaller than the
+  // payload) we must report ACTUAL bytes written, not the requested length,
+  // so the caller never reads an uninitialized tail.
   size_t copy_len = actual_len < (size_t)max_len ? actual_len : (size_t)max_len;
   z_bytes_reader_t reader = z_bytes_get_reader(payload);
-  z_bytes_reader_read(&reader, payload_out, copy_len);
-  return (int32_t)actual_len;
+  size_t read_len = z_bytes_reader_read(&reader, payload_out, copy_len);
+  return (int32_t)read_len;
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,14 +1494,17 @@ FFI_PLUGIN_EXPORT int8_t zd_pull_subscriber_try_recv(
   memcpy(*out_keyexpr, key_data, key_len);
   (*out_keyexpr)[key_len] = '\0';
 
-  // 2. Payload as bytes (byte-faithful reader pattern, per zd_bytes_to_buf)
+  // 2. Payload as bytes (byte-faithful reader pattern, per zd_bytes_to_buf).
+  // Check the reader rc and report ACTUAL bytes read, so a short read never
+  // exposes an uninitialized tail to the caller.
   const z_loaned_bytes_t* payload_loaned = z_sample_payload(s);
   size_t payload_byte_len = z_bytes_len(payload_loaned);
   if (payload_byte_len > 0) {
     *out_payload = (uint8_t*)malloc(payload_byte_len);
     z_bytes_reader_t pl_reader = z_bytes_get_reader(payload_loaned);
-    z_bytes_reader_read(&pl_reader, *out_payload, payload_byte_len);
-    *out_payload_len = (int32_t)payload_byte_len;
+    size_t pl_read = z_bytes_reader_read(&pl_reader, *out_payload,
+                                         payload_byte_len);
+    *out_payload_len = (int32_t)pl_read;
   } else {
     *out_payload = NULL;
     *out_payload_len = 0;
@@ -1364,14 +1529,24 @@ FFI_PLUGIN_EXPORT int8_t zd_pull_subscriber_try_recv(
   }
   z_string_drop(z_string_move(&enc_str));
 
-  // 5. Attachment (nullable; byte-faithful reader pattern)
+  // 5. Attachment (nullable; byte-faithful reader pattern). Empty != absent:
+  // a present-but-empty attachment must surface as a non-NULL pointer with
+  // len 0 (matching the subscriber callback discipline), while an absent
+  // attachment is NULL. We malloc at least 1 byte so the pointer is non-NULL
+  // even for a zero-length attachment; the caller distinguishes on the
+  // pointer, not the length. Check the reader rc and report actual bytes read.
   const z_loaned_bytes_t* attachment = z_sample_attachment(s);
   if (attachment != NULL) {
     size_t att_len = z_bytes_len(attachment);
-    *out_attachment = (uint8_t*)malloc(att_len);
-    z_bytes_reader_t att_reader = z_bytes_get_reader(attachment);
-    z_bytes_reader_read(&att_reader, *out_attachment, att_len);
-    *out_attachment_len = (int32_t)att_len;
+    *out_attachment = (uint8_t*)malloc(att_len > 0 ? att_len : 1);
+    if (att_len > 0) {
+      z_bytes_reader_t att_reader = z_bytes_get_reader(attachment);
+      size_t att_read = z_bytes_reader_read(&att_reader, *out_attachment,
+                                            att_len);
+      *out_attachment_len = (int32_t)att_read;
+    } else {
+      *out_attachment_len = 0;
+    }
   } else {
     *out_attachment = NULL;
     *out_attachment_len = 0;
@@ -1434,7 +1609,8 @@ FFI_PLUGIN_EXPORT void zd_querier_drop(uint8_t* querier) {
 
 FFI_PLUGIN_EXPORT int8_t zd_querier_get(
     const uint8_t* querier, const char* parameters,
-    int64_t port, uint8_t* payload, const char* encoding) {
+    int64_t port, uint8_t* payload, const char* encoding,
+    uint8_t* attachment) {
   const z_loaned_querier_t* loaned =
       z_querier_loan((const z_owned_querier_t*)querier);
 
@@ -1453,11 +1629,29 @@ FFI_PLUGIN_EXPORT int8_t zd_querier_get(
   if (payload != NULL) {
     opts.payload = z_bytes_move((z_owned_bytes_t*)payload);
   }
+  // Optional attachment (z_owned_bytes_t*, consumed via move)
+  if (attachment != NULL) {
+    opts.attachment = z_bytes_move((z_owned_bytes_t*)attachment);
+  }
 
-  // Optional encoding
+  // Optional encoding. Check the rc: do not silently substitute the default
+  // on a bad MIME. This is a POST-move early-return -- the payload/attachment
+  // are already gravestoned, so drop them and the closure here (mirroring
+  // zd_get/zd_put) and return non-zero. The Dart caller's unconditional
+  // markConsumed matches: both ZBytes end up consumed on this path.
   z_owned_encoding_t owned_encoding;
   if (encoding != NULL) {
-    z_encoding_from_str(&owned_encoding, encoding);
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      if (opts.payload != NULL) {
+        z_bytes_drop(opts.payload);
+      }
+      if (opts.attachment != NULL) {
+        z_bytes_drop(opts.attachment);
+      }
+      z_closure_reply_drop(z_closure_reply_move(&callback));
+      return (int8_t)enc_rc;
+    }
     opts.encoding = z_encoding_move(&owned_encoding);
   }
 
@@ -1946,8 +2140,33 @@ int zd_declare_advanced_publisher(
 FFI_PLUGIN_EXPORT
 int zd_advanced_publisher_put(
     const ze_loaned_advanced_publisher_t* publisher,
-    z_owned_bytes_t* payload) {
-  return ze_advanced_publisher_put(publisher, z_bytes_move(payload), NULL);
+    z_owned_bytes_t* payload,
+    const char* encoding,
+    z_owned_bytes_t* attachment) {
+  ze_advanced_publisher_put_options_t opts;
+  ze_advanced_publisher_put_options_default(&opts);
+
+  z_owned_encoding_t owned_encoding;
+  if (encoding != NULL) {
+    // Check the rc: do not silently substitute the default on a bad MIME.
+    z_result_t enc_rc = z_encoding_from_str(&owned_encoding, encoding);
+    if (enc_rc != 0) {
+      // ze_advanced_publisher_put will not run, so the owned payload/attachment
+      // would otherwise leak. Drop them here so this early-return matches the
+      // Dart caller's unconditional markConsumed (gravestone) and frees memory.
+      z_bytes_drop(z_bytes_move(payload));
+      if (attachment != NULL) {
+        z_bytes_drop(z_bytes_move(attachment));
+      }
+      return enc_rc;
+    }
+    opts.put_options.encoding = z_encoding_move(&owned_encoding);
+  }
+  if (attachment != NULL) {
+    opts.put_options.attachment = z_bytes_move(attachment);
+  }
+
+  return ze_advanced_publisher_put(publisher, z_bytes_move(payload), &opts);
 }
 
 FFI_PLUGIN_EXPORT

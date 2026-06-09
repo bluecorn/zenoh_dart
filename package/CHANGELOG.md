@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.19.0 — Binary I/O Pairs: Payload + Attachment Fidelity
+
+Byte-faithful payload **and** attachment across every send/receive transport pair, proven end-to-end. First application of the data-fidelity parity check ("correct in ⟹ correct out").
+
+- **Added: exact attachment bytes on receive** — `Sample.attachmentBytes` (`Uint8List?`) and `Query.attachmentBytes` (`Uint8List?`) expose the exact attachment bytes on every receive surface, alongside the lenient `attachment` String view
+- **Added: attachment + encoding send options** on `Session.put`/`putBytes`, `Session.get`, `Querier.get`, `Query.reply`/`replyBytes`, and `AdvancedPublisher.put`/`putBytes`
+- **Added: `Query.replyErr`/`replyErrBytes`** — send an error reply (payload + encoding), making `ReplyError.payloadBytes` round-trip end-to-end (carve-out: error replies carry no attachment, per the zenoh-c contract)
+- **Fixed: binary attachment corruption** — arbitrary non-UTF-8 payloads and attachments now round-trip byte-exact on every pair (attachments were previously corrupted to U+FFFD on receive)
+- **Fixed: use-after-move** — `Session.get`, `Querier.get`, and `Query.replyBytes` mark consumed `ZBytes` unconditionally (zenoh-c consumes the move regardless of return code); genuine pre-move early-returns correctly retain caller ownership
+- **Fixed: empty vs absent** — present-but-empty is now distinguishable from absent for query payloads and pull-subscriber attachments
+- Hardened native byte-reader and `z_encoding_from_str` return-code handling (no uninitialized tail on short reads; no silent encoding-default substitution)
+- 1 new C shim function (155 → 156: `zd_query_reply_err`; `zd_put`/`zd_get`/`zd_querier_get`/`zd_query_reply`/`zd_advanced_publisher_put` widened with attachment + encoding); back-compatible (new params optional)
+- ~46 new integration tests (525 → 571 total)
+
 ## 0.18.1 — Binary Payload Delivery Fix
 
 - **Fixed: binary payload corruption on every receive surface** — invalid-UTF-8 payloads (protobuf, flatbuffers, raw binary) were silently corrupted in transit to Dart: samples and replies arrived with `payloadBytes` emptied, and query payloads arrived nulled. Affected subscriber (all variants), `Session.get` and `Querier.get` replies, queryable `Query.payloadBytes`, and `PullSubscriber.tryRecv()`

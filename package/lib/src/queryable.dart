@@ -43,12 +43,14 @@ class Queryable {
         final keyExpr = message[1] as String;
         final params = message[2] as String;
         final payloadBytes = message[3] as Uint8List?;
+        final attachmentBytes = message[4] as Uint8List?;
 
         final query = Query(
           handle: queryPtr,
           keyExpr: keyExpr,
           parameters: params,
           payloadBytes: payloadBytes,
+          attachmentBytes: attachmentBytes,
         );
         controller.add(query);
       }

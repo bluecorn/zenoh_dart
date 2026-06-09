@@ -252,6 +252,58 @@ void main() {
         expect(sample.encoding, contains('application/json'));
       },
     );
+
+    // Slice 10: the two remaining z_encoding_from_str rc-discards are now
+    // checked in zd_publisher_put and zd_declare_publisher. As established in
+    // Slices 3/6/7/8, z_encoding_from_str does NOT fail observably for junk
+    // MIME in zenoh-c 1.7.2, so we cannot force a throw. Instead we assert a
+    // valid custom encoding survives the rc-checked path (no silent default
+    // substitution) -- the rc IS now checked.
+    test('Publisher.put custom encoding round-trips (rc-checked path)',
+        () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/pub-enc-put-custom',
+      );
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher(
+        'zenoh/dart/test/pub-enc-put-custom',
+      );
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.put(
+        'data',
+        encoding: const Encoding('application/vnd.dart.pub-put'),
+      );
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+      expect(sample.encoding, contains('application/vnd.dart.pub-put'));
+    });
+
+    test('declarePublisher custom encoding round-trips (rc-checked path)',
+        () async {
+      final subscriber = session2.declareSubscriber(
+        'zenoh/dart/test/pub-enc-decl-custom',
+      );
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher(
+        'zenoh/dart/test/pub-enc-decl-custom',
+        encoding: const Encoding('application/vnd.dart.pub-decl'),
+      );
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.put('data');
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+      expect(sample.encoding, contains('application/vnd.dart.pub-decl'));
+    });
   });
 
   group('Multiple publishers integration', () {
