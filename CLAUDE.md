@@ -15,10 +15,10 @@ zenoh_dart/
     hook/                       #   Dart build hooks (CodeAsset registration)
     native/                     #   Prebuilt shared libraries (linux/x86_64/, android/<abi>/)
     example/                    #   CLI examples (26: z_put, z_sub, z_pub, z_get, z_queryable, z_ping, z_storage, z_advanced_pub, etc.)
-    test/                       #   Integration tests (525 tests)
+    test/                       #   Integration tests (571 tests)
     pubspec.yaml
   src/                          # C shim source (outside publish boundary)
-    zenoh_dart.{h,c}            #   155 C shim functions
+    zenoh_dart.{h,c}            #   156 C shim functions
     CMakeLists.txt
     dart/                       #   Dart API DL headers
   extern/
@@ -176,7 +176,7 @@ cd package && dart run example/z_advanced_sub.dart -k 'demo/example/**'
 
 - `Zenoh` — Static utilities: `initLog()`, `scout()`
 - `Config` — Session configuration with JSON5 insertion
-- `Session` — Open/close sessions; `put`, `putBytes`, `deleteResource`, `declareSubscriber`, `declareBackgroundSubscriber`, `declarePublisher`, `declareAdvancedPublisher`, `declareAdvancedSubscriber`, `get`, `declareQueryable`, `declarePullSubscriber`, `declareQuerier`, `declareLivelinessToken`, `declareLivelinessSubscriber`, `livelinessGet`, `zid`, `routersZid()`, `peersZid()`
+- `Session` — Open/close sessions; `put`, `putBytes`, `deleteResource`, `declareSubscriber`, `declareBackgroundSubscriber`, `declarePublisher`, `declareAdvancedPublisher`, `declareAdvancedSubscriber`, `get`, `declareQueryable`, `declarePullSubscriber`, `declareQuerier`, `declareLivelinessToken`, `declareLivelinessSubscriber`, `livelinessGet`, `zid`, `routersZid()`, `peersZid()` (`put`/`putBytes`/`get` accept optional `attachment:` + `encoding:`)
 - `KeyExpr` — Key expression creation and validation; `intersects()`, `includes()`, `equals()` matching
 - `ZBytes` — Binary payload container; `clone()` (shallow ref-counted copy), `toBytes()` (read content as `Uint8List`), `fromInt()`/`toInt()`, `fromDouble()`/`toDouble()`, `fromBool()`/`toBool()`, `slices` (lazy fragment iteration), `isShmBacked` detects SHM backing
 - `ZSerializer` — Streaming serializer for multi-value payloads (uint8–int64, float, double, bool, string, bytes, sequence length)
@@ -184,7 +184,7 @@ cd package && dart run example/z_advanced_sub.dart -k 'demo/example/**'
 - `ZBytesWriter` — Raw byte assembler: `writeAll()`, `append()` (consumed), `finish()`
 - `LivelinessToken` — Announces entity presence on the network; `keyExpr`, `close()`
 - `Publisher` — Declared publisher with `put`/`putBytes`/`deleteResource`/`matchingStatus`/`isExpress` mode
-- `AdvancedPublisher` — Publisher with cache, publisher detection, and sample miss detection (requires `timestamping/enabled: true`)
+- `AdvancedPublisher` — Publisher with cache, publisher detection, and sample miss detection (requires `timestamping/enabled: true`); `put`/`putBytes` accept optional `attachment:` + `encoding:`
 - `AdvancedPublisherOptions` — Cache size, publisher detection, miss detection, heartbeat mode/period
 - `HeartbeatMode` — Enum: `none`, `periodic`, `sporadic`
 - `Subscriber` — Callback-based subscriber delivering `Stream<Sample>`
@@ -192,14 +192,14 @@ cd package && dart run example/z_advanced_sub.dart -k 'demo/example/**'
 - `AdvancedSubscriberOptions` — History, recovery, miss detection, subscriber detection, miss listener
 - `MissEvent` — Missed-sample notification with source `ZenohId` and count
 - `PullSubscriber` — Ring-buffer-backed pull subscriber with `tryRecv()` (lossy, drops oldest)
-- `Querier` — Declared querier for repeated queries with `get()` -> `Stream<Reply>`, `matchingStatus`, `hasMatchingQueryables()`
-- `Query` — Received query with `reply()`/`replyBytes()`/`dispose()`, `keyExpr`, `parameters`, `payloadBytes`
+- `Querier` — Declared querier for repeated queries with `get()` -> `Stream<Reply>`, `matchingStatus`, `hasMatchingQueryables()`; `get()` accepts optional `attachment:` + `encoding:`
+- `Query` — Received query with `reply()`/`replyBytes()`/`replyErr()`/`replyErrBytes()`/`dispose()`, `keyExpr`, `parameters`, `payloadBytes`, `attachmentBytes`; `reply`/`replyBytes` accept optional `attachment:` (`replyErr` carries payload + encoding only — no attachment, per the zenoh-c contract)
 - `Queryable` — Callback-based queryable delivering `Stream<Query>`
 - `Reply` — Tagged union: `isOk`, `ok` (Sample), `error` (ReplyError)
 - `ReplyError` — Error reply with `payloadBytes`, `payload`, `encoding`
 - `QueryTarget` — Enum: `bestMatching`, `all`, `allComplete`
 - `ConsolidationMode` — Enum: `auto`, `none`, `monotonic`, `latest`
-- `Sample` — Received data with `keyExpr`, `payload` (lenient UTF-8 display; invalid bytes become U+FFFD), `payloadBytes` (exact raw bytes), `kind`, `attachment`, `encoding`
+- `Sample` — Received data with `keyExpr`, `payload` (lenient UTF-8 display; invalid bytes become U+FFFD), `payloadBytes` (exact raw bytes), `kind`, `attachment` (lenient UTF-8 display), `attachmentBytes` (exact raw attachment bytes), `encoding`
 - `SampleKind` — Enum: `put`, `delete`
 - `Encoding` — MIME type wrapper with predefined constants
 - `CongestionControl` — Enum: `block`, `drop`

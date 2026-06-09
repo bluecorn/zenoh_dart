@@ -15,7 +15,7 @@ Pure Dart FFI bindings for the [Zenoh](https://zenoh.io/) pub/sub/query protocol
 - Throughput benchmarking (heap tight-loop and SHM zero-copy)
 - Cross-language typed serialization/deserialization (ZSerializer, ZDeserializer)
 - Raw byte assembly (ZBytesWriter) and fragmented slice iteration
-- Byte-exact binary payload delivery (protobuf/flatbuffers/CDR-safe) via `payloadBytes`
+- Byte-exact binary payload **and attachment** delivery (protobuf/flatbuffers/CDR-safe) via `payloadBytes` / `attachmentBytes`, plus attachment + encoding send options and error replies (`replyErr`)
 - Advanced pub/sub: publisher cache, history recovery, sample miss detection with heartbeats
 - Key expression matching (`intersects`/`includes`/`equals`) for storage-style routing
 - Shared memory (SHM) zero-copy for publish, get, and reply (Linux)
@@ -56,7 +56,7 @@ void main() async {
 }
 ```
 
-Binary payloads round-trip byte-exact: publish with `putBytes(key, ZBytes.fromUint8List(bytes))` and read `sample.payloadBytes` on receive (`sample.payload` is a lenient display string — invalid UTF-8 renders as U+FFFD).
+Binary payloads **and attachments** round-trip byte-exact: publish with `putBytes(key, ZBytes.fromUint8List(bytes), attachment: ZBytes.fromUint8List(meta))` and read `sample.payloadBytes` / `sample.attachmentBytes` on receive (the `payload` / `attachment` Strings are lenient display views — invalid UTF-8 renders as U+FFFD).
 
 ## API
 
@@ -81,13 +81,13 @@ Binary payloads round-trip byte-exact: publish with `putBytes(key, ZBytes.fromUi
 | `MissEvent` | Missed-sample notification with source `ZenohId` and count |
 | `PullSubscriber` | Ring-buffer-backed pull subscriber with `tryRecv()` (lossy) |
 | `Querier` | Declared querier for repeated queries with matching status |
-| `Query` | Received query with reply/replyBytes/dispose |
+| `Query` | Received query with reply/replyBytes/replyErr/replyErrBytes/dispose; `payloadBytes`, `attachmentBytes` |
 | `Queryable` | Callback-based queryable delivering `Stream<Query>` |
 | `Reply` | Tagged union: `isOk`, `ok` (Sample), `error` (ReplyError) |
 | `ReplyError` | Error reply with payload and encoding |
 | `QueryTarget` | Enum: `bestMatching`, `all`, `allComplete` |
 | `ConsolidationMode` | Enum: `auto`, `none`, `monotonic`, `latest` |
-| `Sample` | Received data with key, payload (lenient display string), payloadBytes (exact), kind, encoding, attachment |
+| `Sample` | Received data with key, payload (lenient display string), payloadBytes (exact), kind, encoding, attachment, attachmentBytes (exact attachment bytes) |
 | `SampleKind` | Enum: `put`, `delete` |
 | `Encoding` | MIME type wrapper with predefined constants |
 | `CongestionControl` | Enum: `block`, `drop` |

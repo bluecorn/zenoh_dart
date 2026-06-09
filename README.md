@@ -7,7 +7,7 @@ Pure Dart FFI bindings for the [Zenoh](https://zenoh.io/) pub/sub/query protocol
 ```
 zenoh_dart/
   package/          Dart package (publish boundary)
-  src/              C shim source (155 functions)
+  src/              C shim source (156 functions)
   extern/zenoh-c/   zenoh-c submodule (v1.7.2)
   scripts/          Build scripts (Android cross-compilation)
   CMakeLists.txt    Root superbuild
@@ -78,7 +78,7 @@ See [`package/README.md`](package/README.md) for the Dart API documentation, exa
 cd package && dart test
 ```
 
-The 525 integration tests call through the real `libzenoh_dart.so` -> `libzenohc.so` via FFI — no mocks. They open zenoh sessions in peer mode, do pub/sub over TCP with two sessions in the same process, test key expressions (including intersects/includes/equals matching), put/delete, publisher lifecycle (including express mode), SHM alloc/write/publish, scout/info, get/queryable query/reply, SHM get/reply, pull subscriber ring buffer, declared querier with matching status, liveliness token/subscriber/get, background subscriber, ZBytes clone/toBytes, ping/pong latency benchmarks, SHM ping zero-copy benchmarks, throughput benchmarks (heap and SHM), bytes serialization/deserialization (ZSerializer, ZDeserializer, ZBytesWriter, slice iterator, convenience methods), in-memory storage (subscriber + queryable + key expression intersection), advanced pub/sub (cache, history recovery, miss detection, heartbeats), and inter-process scenarios.
+The 571 integration tests call through the real `libzenoh_dart.so` -> `libzenohc.so` via FFI — no mocks. They open zenoh sessions in peer mode, do pub/sub over TCP with two sessions in the same process, test key expressions (including intersects/includes/equals matching), put/delete, publisher lifecycle (including express mode), SHM alloc/write/publish, scout/info, get/queryable query/reply, SHM get/reply, pull subscriber ring buffer, declared querier with matching status, liveliness token/subscriber/get, background subscriber, ZBytes clone/toBytes, ping/pong latency benchmarks, SHM ping zero-copy benchmarks, throughput benchmarks (heap and SHM), bytes serialization/deserialization (ZSerializer, ZDeserializer, ZBytesWriter, slice iterator, convenience methods), in-memory storage (subscriber + queryable + key expression intersection), advanced pub/sub (cache, history recovery, miss detection, heartbeats), byte-exact binary payloads and attachments (with attachment + encoding send options and error replies), and inter-process scenarios.
 
 Tests run against the Linux native libraries on the host machine. Android `.so` files cannot be tested on a Linux host (different architecture/linker) — they are validated by deploying a Flutter app to a real device or emulator. SHM features are excluded on Android.
 
