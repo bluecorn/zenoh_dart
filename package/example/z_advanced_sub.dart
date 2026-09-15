@@ -2,44 +2,50 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:zenoh_dart/zenoh.dart';
+import 'package:zenoh_dart/zenoh_unstable.dart';
+
+import 'common_args.dart';
 
 const defaultKeyExpr = 'demo/example/**';
 
+const helpText =
+    '''
+    Usage: z_advanced_sub [OPTIONS]
+
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression to subscribe to
+''';
+
 Future<void> main(List<String> arguments) async {
-  final parser = ArgParser()
-    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
-
-  final results = parser.parse(arguments);
-  final keyExpr = results.option('key')!;
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr);
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final keyExpr = results.option('key')!;
+  final config = buildConfig(results);
+
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring AdvancedSubscriber on '$keyExpr'...");
   final subscriber = session.declareAdvancedSubscriber(
     keyExpr,
-    options: AdvancedSubscriberOptions(
+    options: const AdvancedSubscriberOptions(
       history: true,
       detectLatePublishers: true,
       recovery: true,
       lastSampleMissDetection: true,
-      periodicQueriesPeriodMs: 1000,
+      // canon deliberately leaves periodic queries OFF and recovers from the
+      // publisher's heartbeats instead (z_advanced_sub.c:72-73 -- the line is
+      // present but commented out). Setting it here would demonstrate the
+      // other recovery mode, and zenoh-c documents periodic queries as
+      // useless when the publication period is at or below the query period,
+      // which is exactly the paired z_advanced_pub's regime.
       subscriberDetection: true,
       enableMissListener: true,
     ),
@@ -64,7 +70,7 @@ Future<void> main(List<String> arguments) async {
     missSubscription = subscriber.missEvents!.listen((event) {
       print(
         '>> [Subscriber] Missed ${event.count} samples from '
-        "'${event.sourceId.toHexString()}'",
+        "'${event.sourceId.zid.toHexString()}' !!!",
       );
     });
   }

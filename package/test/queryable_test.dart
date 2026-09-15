@@ -9,8 +9,8 @@ void main() {
   group('Queryable lifecycle', () {
     late Session session;
 
-    setUpAll(() {
-      session = Session.open();
+    setUpAll(() async {
+      session = await Session.open();
     });
 
     tearDownAll(() {
@@ -31,18 +31,18 @@ void main() {
 
     test('Queryable.close completes without error', () {
       final queryable = session.declareQueryable('demo/test/queryable');
-      expect(() => queryable.close(), returnsNormally);
+      expect(queryable.close, returnsNormally);
     });
 
     test('Queryable.close is idempotent', () {
-      final queryable = session.declareQueryable('demo/test/queryable');
-      queryable.close();
-      expect(() => queryable.close(), returnsNormally);
+      final queryable = session.declareQueryable('demo/test/queryable')
+        ..close();
+      expect(queryable.close, returnsNormally);
     });
 
-    test('declareQueryable on closed session throws StateError', () {
-      final closedSession = Session.open();
-      closedSession.close();
+    test('declareQueryable on closed session throws StateError', () async {
+      final closedSession = await Session.open()
+        ..close();
       expect(
         () => closedSession.declareQueryable('demo/test/queryable'),
         throwsA(
@@ -69,7 +69,7 @@ void main() {
       final queryable = session.declareQueryable('demo/test/queryable/stream');
 
       final doneCompleter = Completer<void>();
-      queryable.stream.listen((_) {}, onDone: () => doneCompleter.complete());
+      queryable.stream.listen((_) {}, onDone: doneCompleter.complete);
 
       queryable.close();
 

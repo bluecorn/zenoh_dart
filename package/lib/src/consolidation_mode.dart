@@ -15,8 +15,8 @@ enum ConsolidationMode {
   /// Latest consolidation: only the latest reply per key expression.
   latest(2);
 
+  const ConsolidationMode(this.value);
+
   /// The zenoh-c integer value for this consolidation mode.
   final int value;
-
-  const ConsolidationMode(this.value);
 }

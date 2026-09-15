@@ -1,0 +1,8 @@
+include: ../analysis_options.yaml
+
+# CLI examples mirror zenoh-c's `z_*.c` demos, whose entire output contract is
+# stdout. Printing is the behavior under test here, not a debugging leftover.
+# Every other very_good rule still applies to this directory.
+linter:
+  rules:
+    avoid_print: false

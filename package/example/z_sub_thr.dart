@@ -4,37 +4,38 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultSamples = 10;
-const defaultMessages = 100000;
+const defaultMessages = 1000000;
+
+const helpText =
+    '''
+    Usage: z_sub_thr [OPTIONS]
+
+    Options:
+        -s, --samples <MESUREMENTS> (optional, number, default='$defaultSamples'): Number of throughput measurements.
+        -n, --number <NUM_MESSAGES> (optional, number, default='$defaultMessages'): Number of messages in each throughput measurements.
+''';
 
 Future<void> main(List<String> arguments) async {
-  final parser = ArgParser()
-    ..addOption('samples', abbr: 's', defaultsTo: '$defaultSamples')
-    ..addOption('number', abbr: 'n', defaultsTo: '$defaultMessages')
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
-
-  final results = parser.parse(arguments);
-
-  final maxRounds = int.parse(results.option('samples')!);
-  final messagesPerRound = int.parse(results.option('number')!);
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('samples', abbr: 's', defaultsTo: '$defaultSamples')
+    ..addOption('number', abbr: 'n', defaultsTo: '$defaultMessages');
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final maxRounds = parseIntArg(results.option('samples')!);
+  final messagesPerRound = parseIntArg(results.option('number')!);
+  final config = buildConfig(results)
+    ..insertJson5('transport/shared_memory/enabled', 'true');
+
   print('Opening session...');
-  final config = Config();
-  config.insertJson5('transport/shared_memory/enabled', 'true');
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring Background Subscriber on 'test/thr'...");
   final bgStream = session.declareBackgroundSubscriber('test/thr');

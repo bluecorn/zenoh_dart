@@ -1,0 +1,54 @@
+# What NOT to put in the published archive.
+#
+# HOW PUB DECIDES. It lists the files ON DISK under this directory and leaves
+# out every one an ignore rule matches. ⛔ Whether git tracks a file plays no
+# part: a committed file an ignore rule matches is left out, and an untracked
+# file no rule matches is published.
+#
+#   * Dot-files and `pubspec.lock` are always left out, by pub's own rules.
+#   * ⚠️ In each directory a `.pubignore` REPLACES that directory's
+#     `.gitignore` -- it does not add to it. So everything package/.gitignore
+#     excluded is re-stated here. For `.dart_tool/` and `pubspec.lock` below
+#     that is belt and braces, since pub's own rules already drop both.
+#   * ⛔ It does not replace any OTHER directory's `.gitignore`. Inside a git
+#     repository pub applies the ignore files of every directory from the
+#     repository root down, so the repository-root `.gitignore` still decides
+#     for the paths it matches: a native library it matches is absent from
+#     the archive whether or not it is committed.
+#
+# Source: dart-lang/pub at ec276d10 -- the revision Dart 3.13.1's DEPS pins --
+# `lib/src/package.dart`, `listFiles` and `_basicIgnoreRules`: "If [dir] is
+# inside a git repository, all ignore files from the repo root are considered.
+# For each directory a .pubignore takes precedence over a .gitignore." Pub runs
+# `git ls-files` only in its gitignore validator, to WARN that a checked-in
+# file is ignored and "Previous versions of Pub would include those".
+#
+# So in the public repository, committing the shipped libraries is not what
+# ships them: they ship only if no ignore file between that repository's root
+# and the library matches them. Verify with `dart pub publish --dry-run`, which
+# lists the archive, never by reading this file.
+
+# The suite and its configuration. Certification runs in the repository, on the
+# repository's tests; the archive carries none of them, so shipping them would
+# ship an instrument nobody who receives it can run.
+test/
+dart_test.yaml
+
+# Binding generation is a maintainer activity against the C header and the
+# build-generated zenoh-c headers, none of which are in the archive.
+ffigen.yaml
+
+# Re-stated from package/.gitignore; pub's own rules drop both anyway (above).
+.dart_tool/
+pubspec.lock
+
+# Editor / assistant state.
+.claude/
+
+# ── Deliberately NOT excluded, and each for a reason ──
+#   lib/      the package
+#   hook/     the build hook -- without it the consumer gets no native asset
+#   native/   the prebuilt libraries; they ARE the distribution mechanism
+#   example/  pub.dev renders it, and it is the CLI cookbook
+#   skills/   reserved for the consumer skill (roadmap R32); absent today
+#   analysis_options.yaml  small, and pana reads the package as configured

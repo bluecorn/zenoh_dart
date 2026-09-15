@@ -1,27 +1,24 @@
-# Dart
+# ⛔ Nothing under package/native/ may be ignored here. The shipped native libraries
+# are COMMITTED in this repository, and pub decides what a published archive holds
+# by the ignore files from the repository root down: a native library an ignore rule
+# matches is left out of the package whether or not it is committed. The release
+# assembly refuses a .gitignore that matches a shipped native path.
+
+# Build output
+/build/
 .dart_tool/
-.packages
-pubspec.lock
-
-# CMake build
-build/
-
-# IDE
-.idea/
-*.iml
-.vscode/
+/pubspec.lock
+**/doc/api/
+/coverage/
+package/coverage/
 
 # FVM
 .fvm/
 
-# OS
+# Editors and operating systems
+.idea/
+*.iml
+.vscode/
 .DS_Store
-
-# Coverage
-coverage/
-
-# Strace/debug logs
+*.swp
 *.log
-
-# DO NOT exclude package/native/ — prebuilt .so files are the distribution mechanism
-# and must be tracked in git.

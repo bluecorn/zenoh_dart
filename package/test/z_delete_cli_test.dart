@@ -2,6 +2,15 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'helpers/cli_process.dart';
+
+/// The Dart executable running this suite.
+///
+/// Spawning `fvm` hardcodes a tool that need not be on PATH, and resolves a
+/// *different* Dart than the one running the test.
+/// `Platform.resolvedExecutable` is the SDK we are already inside.
+final String _dartExe = Platform.resolvedExecutable;
+
 void main() {
   // Get the package root (where pubspec.yaml lives)
   // Tests run from package/
@@ -9,12 +18,11 @@ void main() {
 
   group('z_delete CLI', () {
     Future<ProcessResult> runZDelete([List<String> args = const []]) async {
-      return Process.run('fvm', [
-        'dart',
+      return runToCompletion(_dartExe, [
         'run',
         'example/z_delete.dart',
         ...args,
-      ], workingDirectory: packageRoot).timeout(const Duration(seconds: 30));
+      ], workingDirectory: packageRoot);
     }
 
     test('runs with default arguments', () async {

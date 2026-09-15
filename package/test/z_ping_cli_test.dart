@@ -3,21 +3,10 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-/// The FVM-resolved Dart executable path.
-final _dartExe = Platform.resolvedExecutable;
+import 'helpers/cli_process.dart';
 
-/// Forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
-Future<void> forceKill(Process process) async {
-  process.kill(ProcessSignal.sigterm);
-  try {
-    await process.exitCode.timeout(const Duration(seconds: 3));
-  } catch (_) {
-    process.kill(ProcessSignal.sigkill);
-    await process.exitCode
-        .timeout(const Duration(seconds: 2))
-        .catchError((_) => -1);
-  }
-}
+/// The FVM-resolved Dart executable path.
+final String _dartExe = Platform.resolvedExecutable;
 
 /// Starts z_pong listening on [endpoint] and waits for it to bind.
 /// Returns the running pong process.
@@ -28,9 +17,14 @@ Future<Process> startPong(String endpoint, String packageRoot) async {
     '-l',
     endpoint,
   ], workingDirectory: packageRoot);
+  addTearDown(() => forceKill(process));
 
-  // Wait for z_pong to bind TCP listener
-  await Future<void>.delayed(const Duration(seconds: 8));
+  // Wait for the listener to actually bind rather than assuming 8s is
+  // enough: z_pong prints its readiness banner only after Session.open has
+  // bound the endpoint.
+  final out = StringBuffer();
+  process.stdout.transform(const SystemEncoding().decoder).listen(out.write);
+  await waitForReady(out);
   return process;
 }
 
@@ -39,7 +33,7 @@ void main() {
 
   group('z_ping CLI', () {
     test('requires payload size argument', () async {
-      final result = await Process.run(_dartExe, [
+      final result = await runToCompletion(_dartExe, [
         'run',
         'example/z_ping.dart',
       ], workingDirectory: packageRoot);
@@ -56,7 +50,7 @@ void main() {
         final pongProcess = await startPong(endpoint, packageRoot);
 
         try {
-          final result = await Process.run(_dartExe, [
+          final result = await runToCompletion(_dartExe, [
             'run',
             'example/z_ping.dart',
             '8',
@@ -69,12 +63,19 @@ void main() {
           ], workingDirectory: packageRoot);
 
           expect(result.exitCode, equals(0));
-          expect(result.stdout as String, contains('8 bytes: seq=0 rtt='));
+          // canon prints `%d bytes: seq=%d rtt=%luµs, lat=%luµs`
+          // (z_ping.c:106). A `contains('rtt=')` check stops one character
+          // short of the two things this round changed: the `us` -> `µs`
+          // spelling and the presence of the `lat=` half.
+          expect(
+            result.stdout as String,
+            matches(RegExp(r'8 bytes: seq=0 rtt=\d+µs, lat=\d+µs')),
+          );
         } finally {
           await forceKill(pongProcess);
         }
       },
-      timeout: Timeout(Duration(seconds: 60)),
+      timeout: const Timeout(Duration(seconds: 60)),
     );
 
     test('accepts -n/--samples flag', () async {
@@ -84,7 +85,7 @@ void main() {
       final pongProcess = await startPong(endpoint, packageRoot);
 
       try {
-        final result = await Process.run(_dartExe, [
+        final result = await runToCompletion(_dartExe, [
           'run',
           'example/z_ping.dart',
           '8',
@@ -105,7 +106,7 @@ void main() {
       } finally {
         await forceKill(pongProcess);
       }
-    }, timeout: Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('accepts --no-express flag', () async {
       const port = 18574;
@@ -114,7 +115,7 @@ void main() {
       final pongProcess = await startPong(endpoint, packageRoot);
 
       try {
-        final result = await Process.run(_dartExe, [
+        final result = await runToCompletion(_dartExe, [
           'run',
           'example/z_ping.dart',
           '--no-express',
@@ -132,7 +133,7 @@ void main() {
       } finally {
         await forceKill(pongProcess);
       }
-    }, timeout: Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('accepts -w/--warmup flag', () async {
       const port = 18575;
@@ -141,7 +142,7 @@ void main() {
       final pongProcess = await startPong(endpoint, packageRoot);
 
       try {
-        final result = await Process.run(_dartExe, [
+        final result = await runToCompletion(_dartExe, [
           'run',
           'example/z_ping.dart',
           '8',
@@ -160,6 +161,6 @@ void main() {
       } finally {
         await forceKill(pongProcess);
       }
-    }, timeout: Timeout(Duration(seconds: 60)));
+    }, timeout: const Timeout(Duration(seconds: 60)));
   });
 }

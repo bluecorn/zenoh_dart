@@ -1,40 +1,44 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultKeyExpr = 'demo/example/zenoh-dart-queryable';
 const defaultPayload = 'Queryable from Dart!';
 
+const helpText =
+    '''
+    Usage: z_queryable [OPTIONS]
+
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression matching queries to reply to
+        -p, --payload <PAYLOAD> (optional, string, default='$defaultPayload'): The value to reply to queries with
+        --complete (optional): Indicates whether queryable is complete or not
+''';
+
 Future<void> main(List<String> arguments) async {
+  Zenoh.initLog('error');
+
   final parser = ArgParser()
     ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
     ..addOption('payload', abbr: 'p', defaultsTo: defaultPayload)
-    ..addFlag('complete', defaultsTo: false)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
+    ..addFlag('complete', negatable: false);
+  addCommonArgs(parser);
 
-  final results = parser.parse(arguments);
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
   final keyExpr = results.option('key')!;
   final payload = results.option('payload')!;
   final complete = results.flag('complete');
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
-  Zenoh.initLog('info');
+  final config = buildConfig(results);
 
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring Queryable on '$keyExpr'...");
   final queryable = session.declareQueryable(keyExpr, complete: complete);
@@ -45,12 +49,22 @@ Future<void> main(List<String> arguments) async {
 
   // Listen for queries and reply to them
   final streamSubscription = queryable.stream.listen((query) {
-    print(
-      ">> [Queryable ] Received Query '${query.keyExpr}' "
-      "with parameters '${query.parameters}'",
-    );
-    query.reply(keyExpr, payload);
-    query.dispose();
+    // canon (z_queryable.c:41-53) prints the received query's payload when it
+    // carries one, and the reply it is about to send.
+    final queryPayload = query.payloadBytes;
+    final received =
+        '>> [Queryable ] Received Query '
+        "'${query.keyExpr}?${query.parameters}'";
+    if (queryPayload != null && queryPayload.isNotEmpty) {
+      final value = utf8.decode(queryPayload, allowMalformed: true);
+      print("$received with value '$value'");
+    } else {
+      print(received);
+    }
+    print(">> [Queryable ] Responding ('$keyExpr': '$payload')");
+    query
+      ..reply(keyExpr, payload)
+      ..dispose();
   });
 
   // Handle SIGINT and SIGTERM for clean shutdown

@@ -1,0 +1,50 @@
+# Analyzer options for the TEST TREE ONLY.
+#
+# ⚖️ WHY THIS FILE EXISTS: `dart format` and `lines_longer_than_80_chars` are
+# structurally incompatible in this tree, and roadmap R5 makes the formatter a
+# release check — so two gates would contradict each other on every run.
+#
+# MEASURED 2026-09-12, at `644fb1c`:
+#   * before the formatter pass: `dart analyze --fatal-infos --fatal-warnings`
+#     over `package/` is CLEAN — "No issues found!", exit 0 (run in a detached
+#     worktree at that commit).
+#   * after it: 115 `lines_longer_than_80_chars`, ALL of them under `test/`,
+#     zero under `lib/`, `example/` or `hook/`.
+#
+# ⭐ THE CAUSE, AND WHY IT CANNOT BE SETTLED BY CONFIGURATION. Dart's "tall"
+# formatter (language version >= 3.7; this package declares ^3.13.1) keeps a
+# trailing function literal on the invocation line and lets that line OVERFLOW
+# the page width rather than splitting the argument list. So
+#
+#     test('an unspecified limit behaves identically to the explicit zero',
+#         () async {                                     <- 80-col, hand-wrapped
+#
+# becomes
+#
+#     test('an unspecified limit behaves identically to the explicit zero', () async {
+#
+# at 84 columns, and the formatter will re-join it every time. Narrowing the
+# page width does NOT help — measured on `advanced_cache_test.dart`, that line
+# is 86 columns at `--page-width` 80, 79 AND 76. The lint can therefore only
+# report lines the formatter has already decided are correct.
+#
+# ⛔ THE ALTERNATIVE WAS REJECTED FOR A REASON WORTH RECORDING. The other way to
+# satisfy both is to shorten the 115 test and group names. That is 115 renames
+# across ~50 files for no behavioural gain — and test names are the IDENTITY
+# used to compare a suite run against its baseline by set difference, so the
+# renames would read as 115 tests removed and 115 added and destroy exactly the
+# comparison the release round depends on.
+#
+# ⚠️ WHAT IS GIVEN UP, STATED RATHER THAN GLOSSED: the formatter does not wrap
+# comments or split string literals, so nothing now stops an over-long comment
+# or literal IN THE TEST TREE. That is the cost. It is confined to `test/`,
+# which `package/.pubignore` keeps out of the published archive; `lib/`,
+# `example/` and `hook/` keep the lint, and they are what ships.
+#
+# ▶ To reverse this: delete the file and either drop the formatter pass (R5) or
+# take the 115 renames. Both are one commit.
+include: ../analysis_options.yaml
+
+linter:
+  rules:
+    lines_longer_than_80_chars: false

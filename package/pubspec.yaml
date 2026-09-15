@@ -1,30 +1,79 @@
 name: zenoh_dart
-description: "Dart bindings for the Zenoh pub/sub/query protocol via FFI."
-version: 0.20.0
+description: "Dart bindings for Zenoh, the pub/sub/query protocol, via FFI to zenoh-c 1.8.0. Linux and Android."
+version: 1.0.0-rc.1
 repository: https://github.com/bluecorn/zenoh_dart
 issue_tracker: https://github.com/bluecorn/zenoh_dart/issues
-
 topics:
   - zenoh
   - ffi
   - pubsub
   - networking
-  - iot
-
+  - robotics
 platforms:
-  android:
   linux:
+  android:
 
 environment:
-  sdk: ^3.12.2
+  # THREE REASONS STACK HERE. Each forces a floor at least as high as the one
+  # before it, and the constraint is the highest of the three.
+  #
+  # (1) LANGUAGE: never below 3.12.0, as the library is written. `Query`'s
+  # `@internal` constructor initialises a private field from a named
+  # argument -- `Query({required this._handle, ...})`, called as
+  # `Query(handle: ...)` -- which is the private-named-parameters language
+  # feature, and a package's language version is this constraint's lower
+  # bound. Below 3.12 the package does not compile: lower this floor to
+  # ^3.11.0 and `dart analyze` reports "This requires the
+  # 'private-named-parameters' language feature to be enabled"; at ^3.12.0 it
+  # is clean. ⚠️ It forces the FLOOR, not the API: callers name the argument
+  # `handle` either way, and `{required int handle}) : _handle = handle` has
+  # the same call shape without the feature.
+  #
+  # (2) RUNTIME: never below 3.12.2, whatever else moves. The loader prefers
+  # the variant-correct hook output (.dart_tool/lib/), which aborts with the
+  # v0.6.2 tokio-waker crash on Dart 3.11.x (the VM eagerly dlopen'd the
+  # registered code asset). Dart 3.12.2 dropped the eager load --
+  # interprocess_test 7/7 from .dart_tool/lib/ (Gate A,
+  # development/build/08-gate-a-results.md §3). 3.11.5 measured bad.
+  #
+  # (3) MEASURED-GOOD: ^3.13.1, NOT ^3.13.0. This floor is always "the version
+  # the suite measured good", never the lowest version that happens to work.
+  # Dart 3.13.1 (Flutter 3.47.1) is what the full serial suite ran on,
+  # 2026-08-26. 3.13.0 has had an analyzer pass only, which by this rule is
+  # not measured-good.
+  #
+  # Consumer consequence: a ^3.13.1 floor requires Flutter 3.47.1 or newer —
+  # Flutter 3.47.0 ships Dart 3.13.0 and can no longer resolve this package.
+  # Drops 3.11.x and 3.12.x consumers deliberately (pre-1.0).
+  sdk: ^3.13.1
 
 dependencies:
   args: ^2.6.0
-  code_assets: ^1.0.0
+  code_assets: ^1.2.1
   ffi: ^2.1.3
-  hooks: ^1.0.0
+  # ^2.0.0, NOT ^2.1.0: hooks 2.1.0 raised its floor to meta ^1.19.0, which
+  # conflicts with the meta 1.17.0 the Flutter SDK pins — a ^2.1.0 floor makes
+  # this package unresolvable from any Flutter app. ^2.0.0 lets pub take 2.1.0
+  # for pure Dart and fall back to 2.0.2 under Flutter. Not `any`: the 2.0.0
+  # break did not raise the SDK bound, so the SDK constraint cannot catch it.
+  hooks: ^2.0.0
+  # ^1.15.0 (not higher): @internal on the unstable seam (Session.loanedHandle,
+  # KeyExpr.loanedKeyExpr). Kept below the Flutter-pinned meta so it never
+  # forces a version Flutter can't provide (same reasoning as the hooks floor).
+  meta: ^1.15.0
 
 dev_dependencies:
-  ffigen: ^20.1.1
-  lints: ^5.1.0
+  ffigen: 21.0.0
   test: ^1.25.0
+  very_good_analysis: ^10.3.0
+
+# Feature-variant selection for the native build hook. Honored only for THIS
+# package's own root builds (`cd package && fvm dart test`) and ignored for
+# consumers, who set their own — so this line documents the mechanism and our
+# dev/test default. `unstable` (not the canon `stable` default) because the
+# test suite still exercises the full API (SHM/advanced); the entrypoint split
+# (step 5) is what lets the default flip to `stable` with the 2x matrix.
+hooks:
+  user_defines:
+    zenoh_dart:
+      variant: unstable

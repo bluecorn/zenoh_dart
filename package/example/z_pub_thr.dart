@@ -1,50 +1,47 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultPriority = 5; // Z_PRIORITY_DATA
 
-void main(List<String> arguments) {
-  final parser = ArgParser()
-    ..addOption('priority', abbr: 'p', defaultsTo: '$defaultPriority')
-    ..addFlag('express', defaultsTo: false)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
+const helpText =
+    '''
+    Usage: z_pub_thr [OPTIONS] <PAYLOAD_SIZE>
 
-  final results = parser.parse(arguments);
+    Arguments:
+        <PAYLOAD_SIZE> (required, number): Size of the payload to publish
 
-  if (results.rest.isEmpty) {
-    stderr.writeln('<PAYLOAD_SIZE> argument is required');
-    exit(1);
-  }
+    Options:
+        -p, --priority <PRIORITY> (optional, number [1 - 7], default='$defaultPriority'): Priority for sending data
+        --express (optional): Batch messages.
+''';
 
-  final payloadSize = int.parse(results.rest[0]);
-  final priorityValue = int.parse(results.option('priority')!);
-  final express = results.flag('express');
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
+Future<void> main(List<String> arguments) async {
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('priority', abbr: 'p', defaultsTo: '$defaultPriority')
+    ..addFlag('express', negatable: false);
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  final payloadSize = requirePositionalSize(results, '<PAYLOAD_SIZE>');
+
+  final priority = parsePriority(results.option('priority')!);
+  final express = results.flag('express');
+  final config = buildConfig(results);
+
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring Publisher on 'test/thr'...");
   final publisher = session.declarePublisher(
     'test/thr',
     congestionControl: CongestionControl.block,
-    priority: Priority.values[priorityValue - 1],
+    priority: priority,
     isExpress: express,
   );
 

@@ -4,39 +4,43 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultKeyExpr = 'demo/example/zenoh-dart-pub';
 const defaultValue = 'Pub from Dart!';
 
+const helpText =
+    '''
+    Usage: z_pub [OPTIONS]
+
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression to write to
+        -p, --payload <PAYLOAD> (optional, string, default='$defaultValue'): The value to write
+        -a, --attach <ATTACHMENT> (optional, string, default=NULL): The attachment to add to each put
+        --add-matching-listener (optional): Add matching listener
+''';
+
 Future<void> main(List<String> arguments) async {
+  Zenoh.initLog('error');
+
   final parser = ArgParser()
     ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
     ..addOption('payload', abbr: 'p', defaultsTo: defaultValue)
     ..addOption('attach', abbr: 'a')
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l')
-    ..addFlag('add-matching-listener', defaultsTo: false);
+    ..addFlag('add-matching-listener', negatable: false);
+  addCommonArgs(parser);
 
-  final results = parser.parse(arguments);
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
   final keyExpr = results.option('key')!;
   final value = results.option('payload')!;
   final attachStr = results.option('attach');
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
   final addMatchingListener = results.flag('add-matching-listener');
-
-  Zenoh.initLog('error');
+  final config = buildConfig(results);
 
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring Publisher on '$keyExpr'...");
   final publisher = session.declarePublisher(
@@ -67,13 +71,15 @@ Future<void> main(List<String> arguments) async {
 
   var idx = 0;
   final timer = Timer.periodic(const Duration(seconds: 1), (_) {
-    final payload = '[$idx] $value';
+    // canon: sprintf(buf, "[%4d] %s", idx, args.value)
+    final payload = '[${idx.toString().padLeft(4)}] $value';
     print("Putting Data ('$keyExpr': '$payload')...");
-    if (attachStr != null) {
-      publisher.put(payload, attachment: ZBytes.fromString(attachStr));
-    } else {
-      publisher.put(payload);
-    }
+    publisher.put(
+      payload,
+      // canon sets text/plain on every put (z_pub.c:87-90).
+      encoding: Encoding.textPlain,
+      attachment: attachStr != null ? ZBytes.fromString(attachStr) : null,
+    );
     idx++;
   });
 

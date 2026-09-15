@@ -4,21 +4,10 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
-/// The FVM-resolved Dart executable path.
-final _dartExe = Platform.resolvedExecutable;
+import 'helpers/cli_process.dart';
 
-/// Forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
-Future<void> forceKill(Process process) async {
-  process.kill(ProcessSignal.sigterm);
-  try {
-    await process.exitCode.timeout(const Duration(seconds: 3));
-  } catch (_) {
-    process.kill(ProcessSignal.sigkill);
-    await process.exitCode
-        .timeout(const Duration(seconds: 2))
-        .catchError((_) => -1);
-  }
-}
+/// The FVM-resolved Dart executable path.
+final String _dartExe = Platform.resolvedExecutable;
 
 void main() {
   final packageRoot = Directory.current.path;
@@ -29,6 +18,7 @@ void main() {
         'run',
         'example/z_sub.dart',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final subscription = process.stdout
@@ -36,7 +26,7 @@ void main() {
           .listen(stdout.write);
 
       // Let it run for 3 seconds, then kill it
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await subscription.cancel();
 
@@ -59,6 +49,7 @@ void main() {
         '-l',
         endpoint,
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(subProcess));
 
       final subStdout = StringBuffer();
       final completer = Completer<void>();
@@ -73,14 +64,14 @@ void main() {
           });
 
       try {
-        // Wait for subscriber session to bind TCP listener
-        // (build hooks add ~2s startup overhead)
-        await Future<void>.delayed(const Duration(seconds: 8));
+        // Wait for the subscriber to bind rather than assuming 8s covers
+        // startup + build-hook overhead.
+        await waitForReady(subStdout);
 
         // Use in-process session to put (avoids subprocess startup race)
-        final config = Config();
-        config.insertJson5('connect/endpoints', '["$endpoint"]');
-        final session = Session.open(config: config);
+        final config = Config()
+          ..insertJson5('connect/endpoints', '["$endpoint"]');
+        final session = await Session.open(config: config);
 
         // Give the TCP connection time to negotiate
         await Future<void>.delayed(const Duration(seconds: 2));
@@ -108,13 +99,14 @@ void main() {
         '--key',
         'demo/custom/**',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final subscription = process.stdout
           .transform(const SystemEncoding().decoder)
           .listen(stdout.write);
 
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await subscription.cancel();
 
@@ -122,14 +114,62 @@ void main() {
     });
 
     test('with empty key expression fails', () async {
-      final result = await Process.run(_dartExe, [
+      final result = await runToCompletion(_dartExe, [
         'run',
         'example/z_sub.dart',
         '--key',
         '',
-      ], workingDirectory: packageRoot).timeout(const Duration(seconds: 30));
+      ], workingDirectory: packageRoot);
 
       expect(result.exitCode, isNot(0));
     });
+
+    test(
+      'prints the attachment alongside the received sample',
+      () async {
+        // canon appends ` (<attachment>)` when the sample carries one. Without
+        // it the canonical `z_pub -a` -> `z_sub` demo pair loses its point: the
+        // attachment is sent and never shown.
+        const endpoint = 'tcp/127.0.0.1:18563';
+        const keyExpr = 'test/sub/attach';
+
+        final process = await Process.start(_dartExe, [
+          'run',
+          'example/z_sub.dart',
+          '-k',
+          keyExpr,
+          '-l',
+          endpoint,
+          '--no-multicast-scouting',
+        ], workingDirectory: packageRoot);
+        addTearDown(() => forceKill(process));
+
+        final out = StringBuffer();
+        final sub = process.stdout
+            .transform(const SystemEncoding().decoder)
+            .listen(out.write);
+        addTearDown(sub.cancel);
+
+        await waitForReady(out);
+        await Future<void>.delayed(const Duration(seconds: 2));
+
+        final config = Config()
+          ..insertJson5('connect/endpoints', '["$endpoint"]')
+          ..insertJson5('scouting/multicast/enabled', 'false');
+        final session = await Session.open(config: config);
+        addTearDown(session.close);
+        await Future<void>.delayed(const Duration(seconds: 2));
+
+        session.put(
+          keyExpr,
+          'body-text',
+          attachment: ZBytes.fromString('attached-metadata'),
+        );
+
+        await waitForOutput(out, 'Received PUT');
+        expect(out.toString(), contains("'body-text') (attached-metadata)"));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
   });
 }

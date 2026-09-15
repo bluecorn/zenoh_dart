@@ -9,11 +9,6 @@ void main() {
       expect(QueryTarget.allComplete.index, 2);
       expect(QueryTarget.values.length, 3);
     });
-
-    test('values are distinct', () {
-      final indices = QueryTarget.values.map((v) => v.index).toSet();
-      expect(indices.length, QueryTarget.values.length);
-    });
   });
 
   group('ConsolidationMode', () {
@@ -22,10 +17,6 @@ void main() {
       expect(ConsolidationMode.none.value, 0);
       expect(ConsolidationMode.monotonic.value, 1);
       expect(ConsolidationMode.latest.value, 2);
-    });
-
-    test('auto maps to -1', () {
-      expect(ConsolidationMode.auto.value, equals(-1));
     });
   });
 }

@@ -2,46 +2,50 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:zenoh_dart/zenoh.dart';
+import 'package:zenoh_dart/zenoh_unstable.dart';
 
-const defaultKeyExpr = 'demo/example/zenoh-dart-advanced-pub';
-const defaultValue = 'Advanced Pub from Dart!';
+import 'common_args.dart';
+
+const defaultKeyExpr = 'demo/example/zenoh-dart-pub';
+const defaultValue = 'Pub from Dart!';
+const defaultHistory = 1;
+
+const helpText =
+    '''
+    Usage: z_advanced_pub [OPTIONS]
+
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression to write to
+        -p, --payload <PAYLOAD> (optional, string, default='$defaultValue'): The value to write
+        -i, --history <HISTORY_SIZE> (optional, string, default=$defaultHistory): The number of publications to keep in cache
+''';
 
 Future<void> main(List<String> arguments) async {
+  Zenoh.initLog('error');
+
   final parser = ArgParser()
     ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
     ..addOption('payload', abbr: 'p', defaultsTo: defaultValue)
-    ..addOption('history', abbr: 'i', defaultsTo: '1')
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
+    ..addOption('history', abbr: 'i', defaultsTo: '$defaultHistory');
+  addCommonArgs(parser);
 
-  final results = parser.parse(arguments);
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
   final keyExpr = results.option('key')!;
   final value = results.option('payload')!;
-  final history = int.parse(results.option('history')!);
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
-  Zenoh.initLog('error');
+  final history = parseIntArg(results.option('history')!);
+  final config = buildConfig(results)
+    ..insertJson5('timestamping/enabled', 'true');
 
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  config.insertJson5('timestamping/enabled', 'true');
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring AdvancedPublisher on '$keyExpr'...");
   final publisher = session.declareAdvancedPublisher(
     keyExpr,
     options: AdvancedPublisherOptions(
-      cacheMaxSamples: history,
+      cache: AdvancedPublisherCacheOptions(maxSamples: history),
       publisherDetection: true,
       sampleMissDetection: true,
       heartbeatMode: HeartbeatMode.periodic,
@@ -62,8 +66,8 @@ Future<void> main(List<String> arguments) async {
 
   var idx = 0;
   final timer = Timer.periodic(const Duration(seconds: 1), (_) {
-    final payload = '[$idx] $value';
-    print("Putting Data ('$keyExpr': '$payload')...");
+    final payload = '[${idx.toString().padLeft(4)}] $value';
+    print("Put Data ('$keyExpr': '$payload')...");
     publisher.put(payload);
     idx++;
   });

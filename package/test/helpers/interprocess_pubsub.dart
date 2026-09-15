@@ -5,7 +5,8 @@ import 'package:zenoh_dart/zenoh.dart';
 /// Helper script for inter-process pub/sub tests.
 ///
 /// Modes:
-///   `--mode sub --port PORT`  Listen on port, subscribe, print received samples
+///   `--mode sub --port PORT`  Listen on port, subscribe, print received
+///                             samples
 ///   `--mode pub --port PORT`  Connect to port, publish payload
 ///
 /// Options:
@@ -42,12 +43,17 @@ void main(List<String> args) async {
     exit(1);
   }
 
-  final config = Config();
-  config.insertJson5('mode', '"peer"');
+  // Scouting fully off in both legs: with no discovery path available, delivery
+  // can only have travelled the configured TCP endpoint. With multicast left on
+  // these tests prove "delivered by some route", not "delivered by this one".
+  final config = Config()
+    ..insertJson5('mode', '"peer"')
+    ..insertJson5('scouting/multicast/enabled', 'false')
+    ..insertJson5('scouting/gossip/enabled', 'false');
 
   if (mode == 'sub') {
     config.insertJson5('listen/endpoints', '["tcp/127.0.0.1:$port"]');
-    final session = Session.open(config: config);
+    final session = await Session.open(config: config);
     final subscriber = session.declareSubscriber(key);
 
     stdout.writeln('SUB_READY');
@@ -67,28 +73,48 @@ void main(List<String> args) async {
     exit(0);
   } else if (mode == 'pub') {
     config.insertJson5('connect/endpoints', '["tcp/127.0.0.1:$port"]');
-    final session = Session.open(config: config);
+    final session = await Session.open(config: config);
+
+    // Wait until the link is actually up, not until a guessed second has
+    // passed. A put fired before the link exists is dropped silently
+    // (fire-and-forget), and with scouting off there is no second route to
+    // rescue it — so this poll is what keeps the following puts deliverable.
+    if (!await _awaitPeer(session)) {
+      stderr.writeln('No peer appeared on tcp/127.0.0.1:$port');
+      session.close();
+      exit(1);
+    }
 
     stdout.writeln('PUB_READY');
-
-    // Allow TCP link to establish
-    await Future<void>.delayed(Duration(seconds: 1));
 
     for (var i = 0; i < count; i++) {
       final msg = count > 1 ? '$payload-$i' : payload;
       session.put(key, msg);
       stdout.writeln('SENT:$msg');
       if (i < count - 1) {
-        await Future<void>.delayed(Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
 
     // Allow messages to flush
-    await Future<void>.delayed(Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(seconds: 1));
     session.close();
     exit(0);
   } else {
     stderr.writeln('Unknown mode: $mode (expected pub or sub)');
     exit(1);
   }
+}
+
+/// Polls [Session.peersZid] until a peer is visible, or the deadline passes.
+Future<bool> _awaitPeer(
+  Session session, {
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (session.peersZid().isNotEmpty) return true;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  return false;
 }

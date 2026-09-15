@@ -1,0 +1,45 @@
+# package:test configuration for zenoh_dart.
+#
+# concurrency: 1 -- SERIAL by default, on a MEASURED basis (2026-08-28).
+#
+# ⚠️ THE REASON THIS FILE USED TO GIVE WAS FALSE, and is corrected here rather
+# than deleted. It said the tests "contend for the network and for discovery".
+# Discovery contention was measured false on 2026-08-27 -- three default-config
+# peers discovered none of each other -- and the SIGBUS that actually motivated
+# serial was a build-layer defect (the toolchain rewriting the staged `.so`
+# mid-run), now mitigated by `scripts/test.sh` pinning ZENOH_DART_VARIANT.
+# Zero SIGBUS was measured at c=4 and c=8 after that landed.
+#
+# WHAT SERIAL NOW RESTS ON. Five runs at `--concurrency=4`, same commit, idle
+# machine: a `ZenohException: Failed to open session (code: -4)` appeared in
+# THREE of the five, and on a DIFFERENT FILE every time -- liveliness, querier,
+# shm_provider, and get_queryable in an earlier series. Four sightings, four
+# files, zero overlap. It does not localise, so it cannot be handled by naming
+# exceptions, and its cause is not diagnosed.
+#
+# ⭐ PARALLEL IS FINE FOR ITERATING, AND CANNOT CERTIFY. The failure mode is a
+# spurious red, never a missed defect -- parallel adds failures, it does not
+# hide them. `--concurrency=4` finds real failures ~3.4x faster (11:20 against
+# 38:52) and about three runs in five carry a red nobody should adjudicate.
+# Use it to iterate; certify serial.
+#
+# ⛔ IF YOU PASS `--concurrency`, PASS A NUMBER, AND NOT THE DEFAULT. `dart
+# test` defaults to 10 -- a fixed value, not derived from core count -- and
+# c=8 is a DIFFERENT REGIME, not a bigger c=4: it produced 157 reds across ~20
+# files where c=4 produced one non-localising flake.
+#
+# This file makes serial the default so a run that forgets the flag is still
+# correct. `development/discipline/verification.md` remains the authority;
+# the full measurement is in
+# `development/research/probes-ci-posture-20260828/measurement.md`.
+#
+# filename -- pinned to package:test's own default ON PURPOSE, not by accident.
+# The Track D interop harness under test/interop/ is named `*_interop.dart`
+# precisely so the default suite cannot see it, which is what keeps the
+# measured baseline stable. That mechanism rests on this glob, and it was
+# previously the default only because no dart_test.yaml existed. Now that one
+# does, the glob is stated explicitly: changing it would silently pull every
+# interop file into the default suite and move the baseline with no error and
+# no warning. See the note at the head of test/interop/canon.dart.
+concurrency: 1
+filename: "*_test.dart"

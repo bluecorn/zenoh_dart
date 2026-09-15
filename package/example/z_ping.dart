@@ -1,48 +1,46 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultSamples = 100;
 const defaultWarmup = 1000;
 
+const helpText =
+    '''
+    Usage: z_ping [OPTIONS] <PAYLOAD_SIZE>
+
+    Arguments:
+        <PAYLOAD_SIZE> (required, number): Size of the payload to publish
+
+    Options:
+        -n, --samples <SAMPLES> (optional, int, default=$defaultSamples): The number of pings to be attempted
+        -w, --warmup <WARMUP> (optional, int, default=$defaultWarmup): The warmup time in ms during which pings will be emitted but not measured
+        --no-express (optional): Disable message batching.
+''';
+
 Future<void> main(List<String> arguments) async {
+  Zenoh.initLog('error');
+
   final parser = ArgParser()
     ..addOption('samples', abbr: 'n', defaultsTo: '$defaultSamples')
     ..addOption('warmup', abbr: 'w', defaultsTo: '$defaultWarmup')
-    ..addFlag('no-express', defaultsTo: false)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
+    ..addFlag('no-express', negatable: false);
+  addCommonArgs(parser);
 
-  final results = parser.parse(arguments);
+  final results = parseArgs(parser, arguments, helpText);
+  final payloadSize = requirePositionalSize(results, '<PAYLOAD_SIZE>');
 
-  if (results.rest.isEmpty) {
-    stderr.writeln('<PAYLOAD_SIZE> argument is required');
-    exit(1);
-  }
-
-  final payloadSize = int.parse(results.rest[0]);
-  final samples = int.parse(results.option('samples')!);
-  final warmup = int.parse(results.option('warmup')!);
+  final samples = parseIntArg(results.option('samples')!);
+  final warmup = parseIntArg(results.option('warmup')!);
   final noExpress = results.flag('no-express');
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
-  Zenoh.initLog('info');
+  final config = buildConfig(results);
 
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Declaring Publisher on 'test/ping'...");
   final publisher = session.declarePublisher(
@@ -77,15 +75,27 @@ Future<void> main(List<String> arguments) async {
   }
 
   // Measurement phase
+  final rtts = List<int>.filled(samples, 0);
   for (var i = 0; i < samples; i++) {
     pongCompleter = Completer<void>();
+    // canon (z_ping.c:96-98) builds the payload BEFORE starting the clock, so
+    // the native allocation and copy stay outside the measured window. Timing
+    // them inflates every sample by a payload-size-dependent cost that no
+    // other binding pays, which is exactly what breaks cross-binding
+    // comparability. (z_ping_shm deliberately keeps its clone inside the
+    // window -- there the clone is the operation under test.)
+    final zbytes = ZBytes.fromUint8List(payload);
     final stopwatch = Stopwatch()..start();
-    publisher.putBytes(ZBytes.fromUint8List(payload));
+    publisher.putBytes(zbytes);
     await pongCompleter.future;
     stopwatch.stop();
-    final rtt = stopwatch.elapsedMicroseconds;
-    final lat = rtt ~/ 2;
-    print('$payloadSize bytes: seq=$i rtt=${rtt}us, lat=${lat}us');
+    rtts[i] = stopwatch.elapsedMicroseconds;
+  }
+
+  // canon prints the collected results after the loop, keeping stdout I/O out
+  // from between measured pings.
+  for (var i = 0; i < samples; i++) {
+    print('$payloadSize bytes: seq=$i rtt=${rtts[i]}µs, lat=${rtts[i] ~/ 2}µs');
   }
 
   await streamSubscription.cancel();

@@ -4,21 +4,10 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
-/// The FVM-resolved Dart executable path.
-final _dartExe = Platform.resolvedExecutable;
+import 'helpers/cli_process.dart';
 
-/// Forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
-Future<void> forceKill(Process process) async {
-  process.kill(ProcessSignal.sigterm);
-  try {
-    await process.exitCode.timeout(const Duration(seconds: 3));
-  } catch (_) {
-    process.kill(ProcessSignal.sigkill);
-    await process.exitCode
-        .timeout(const Duration(seconds: 2))
-        .catchError((_) => -1);
-  }
-}
+/// The FVM-resolved Dart executable path.
+final String _dartExe = Platform.resolvedExecutable;
 
 void main() {
   final packageRoot = Directory.current.path;
@@ -29,6 +18,7 @@ void main() {
         'run',
         'example/z_queryable.dart',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final subscription = process.stdout
@@ -36,7 +26,7 @@ void main() {
           .listen(stdout.write);
 
       // Let it run for 3 seconds, then kill it
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await subscription.cancel();
 
@@ -51,13 +41,14 @@ void main() {
         '--key',
         'demo/custom/q',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final subscription = process.stdout
           .transform(const SystemEncoding().decoder)
           .listen(stdout.write);
 
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await subscription.cancel();
 
@@ -77,6 +68,7 @@ void main() {
         '-l',
         endpoint,
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(qProcess));
 
       final qStdout = StringBuffer();
       final completer = Completer<void>();
@@ -97,23 +89,38 @@ void main() {
         await Future<void>.delayed(const Duration(seconds: 3));
 
         // Open in-process session connecting to the queryable
-        final config = Config();
-        config.insertJson5('connect/endpoints', '["$endpoint"]');
-        final session = Session.open(config: config);
+        final config = Config()
+          ..insertJson5('connect/endpoints', '["$endpoint"]');
+        final session = await Session.open(config: config);
 
         // Give the TCP connection time to negotiate
         await Future<void>.delayed(const Duration(seconds: 2));
 
-        // Send a get query
-        final replies = <Reply>[];
-        await for (final reply in session.get(
-          'demo/cli/q',
-          timeout: const Duration(seconds: 5),
-        )) {
-          replies.add(reply);
-        }
+        // Send a get query carrying a payload: canon's handler branches on
+        // `z_query_payload` and prints `... with value '<payload>'`
+        // (z_queryable.c:41-53). Without a payload that branch never runs, so
+        // the query-payload display would go untested.
+        final replies = await session
+            .get(
+              'demo/cli/q',
+              payload: ZBytes.fromString('query-side-value'),
+              timeout: const Duration(seconds: 5),
+            )
+            .toList();
 
         expect(replies, isNotEmpty);
+        // Both lines can only have been printed by the handler that produced
+        // the reply just received.
+        expect(
+          qStdout.toString(),
+          contains(
+            "Received Query 'demo/cli/q?' with value 'query-side-value'",
+          ),
+        );
+        expect(
+          qStdout.toString(),
+          contains(">> [Queryable ] Responding ('demo/cli/q':"),
+        );
         expect(replies.first.isOk, isTrue);
         expect(replies.first.ok.payload, contains('Queryable from Dart'));
 
@@ -126,6 +133,6 @@ void main() {
         await forceKill(qProcess);
         await qSubscription.cancel();
       }
-    }, timeout: Timeout(Duration(seconds: 40)));
+    }, timeout: const Timeout(Duration(seconds: 40)));
   });
 }

@@ -2,21 +2,10 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-/// The FVM-resolved Dart executable path.
-final _dartExe = Platform.resolvedExecutable;
+import 'helpers/cli_process.dart';
 
-/// Forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
-Future<void> forceKill(Process process) async {
-  process.kill(ProcessSignal.sigterm);
-  try {
-    await process.exitCode.timeout(const Duration(seconds: 3));
-  } catch (_) {
-    process.kill(ProcessSignal.sigkill);
-    await process.exitCode
-        .timeout(const Duration(seconds: 2))
-        .catchError((_) => -1);
-  }
-}
+/// The FVM-resolved Dart executable path.
+final String _dartExe = Platform.resolvedExecutable;
 
 void main() {
   final packageRoot = Directory.current.path;
@@ -27,6 +16,7 @@ void main() {
         'run',
         'example/z_liveliness.dart',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final subscription = process.stdout
@@ -34,7 +24,7 @@ void main() {
           .listen(stdout.write);
 
       // Let it run for 3 seconds, then kill it
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await subscription.cancel();
 
@@ -55,6 +45,7 @@ void main() {
         '--listen',
         'tcp/127.0.0.1:18560',
       ], workingDirectory: packageRoot);
+      addTearDown(() => forceKill(process));
 
       final stdout = StringBuffer();
       final stderr = StringBuffer();
@@ -65,7 +56,7 @@ void main() {
           .transform(const SystemEncoding().decoder)
           .listen(stderr.write);
 
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await waitForReady(stdout);
       await forceKill(process);
       await stdoutSub.cancel();
       await stderrSub.cancel();
@@ -75,12 +66,12 @@ void main() {
     });
 
     test('invalid key expression exits with error', () async {
-      final result = await Process.run(_dartExe, [
+      final result = await runToCompletion(_dartExe, [
         'run',
         'example/z_liveliness.dart',
         '--key',
         '',
-      ], workingDirectory: packageRoot).timeout(const Duration(seconds: 30));
+      ], workingDirectory: packageRoot);
 
       expect(result.exitCode, isNot(0));
     });
