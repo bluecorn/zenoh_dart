@@ -7,8 +7,8 @@ void main() {
   group('Publisher lifecycle', () {
     late Session session;
 
-    setUpAll(() {
-      session = Session.open();
+    setUpAll(() async {
+      session = await Session.open();
     });
 
     tearDownAll(() {
@@ -29,18 +29,17 @@ void main() {
 
     test('Publisher.close completes without error', () {
       final publisher = session.declarePublisher('demo/example/pub');
-      expect(() => publisher.close(), returnsNormally);
+      expect(publisher.close, returnsNormally);
     });
 
     test('Publisher.close is idempotent (double-close safe)', () {
-      final publisher = session.declarePublisher('demo/example/pub');
-      publisher.close();
-      expect(() => publisher.close(), returnsNormally);
+      final publisher = session.declarePublisher('demo/example/pub')..close();
+      expect(publisher.close, returnsNormally);
     });
 
-    test('declarePublisher on closed session throws StateError', () {
-      final closedSession = Session.open();
-      closedSession.close();
+    test('declarePublisher on closed session throws StateError', () async {
+      final closedSession = await Session.open()
+        ..close();
       expect(
         () => closedSession.declarePublisher('demo/example/pub'),
         throwsA(
@@ -115,24 +114,23 @@ void main() {
     });
 
     test('Publisher.put after close throws StateError', () {
-      final publisher = session.declarePublisher('demo/example/pub-closed');
-      publisher.close();
+      final publisher = session.declarePublisher('demo/example/pub-closed')
+        ..close();
       expect(() => publisher.put('test'), throwsA(isA<StateError>()));
     });
 
     test('Publisher operations after close throw StateError', () {
-      final publisher = session.declarePublisher('demo/example/pub');
-      publisher.close();
+      final publisher = session.declarePublisher('demo/example/pub')..close();
 
       expect(() => publisher.put('test'), throwsA(isA<StateError>()));
       expect(
         () => publisher.putBytes(ZBytes.fromString('test')),
         throwsA(isA<StateError>()),
       );
-      expect(() => publisher.deleteResource(), throwsA(isA<StateError>()));
+      expect(publisher.deleteResource, throwsA(isA<StateError>()));
       expect(() => publisher.keyExpr, throwsA(isA<StateError>()));
       expect(
-        () => publisher.hasMatchingSubscribers(),
+        publisher.hasMatchingSubscribers,
         throwsA(isA<StateError>()),
       );
     });
@@ -140,13 +138,13 @@ void main() {
     test('Publisher.deleteResource completes without error', () {
       final publisher = session.declarePublisher('demo/example/pub-del');
       addTearDown(publisher.close);
-      expect(() => publisher.deleteResource(), returnsNormally);
+      expect(publisher.deleteResource, returnsNormally);
     });
 
     test('Publisher.deleteResource after close throws StateError', () {
-      final publisher = session.declarePublisher('demo/example/pub-del2');
-      publisher.close();
-      expect(() => publisher.deleteResource(), throwsA(isA<StateError>()));
+      final publisher = session.declarePublisher('demo/example/pub-del2')
+        ..close();
+      expect(publisher.deleteResource, throwsA(isA<StateError>()));
     });
   });
 
@@ -155,15 +153,15 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17452"]');
-      session1 = Session.open(config: config1);
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17452"]');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17452"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17452"]');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -315,15 +313,15 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17453"]');
-      session1 = Session.open(config: config1);
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17453"]');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17453"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17453"]');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -334,7 +332,8 @@ void main() {
     });
 
     test(
-      'Multiple publishers on different keys each received by correct subscriber',
+      'Multiple publishers on different keys each received by correct '
+      'subscriber',
       () async {
         final subA = session2.declareSubscriber('zenoh/dart/test/pub-a');
         addTearDown(subA.close);
@@ -366,18 +365,23 @@ void main() {
   group('Publisher QoS options', () {
     late Session session;
 
-    setUpAll(() {
-      session = Session.open();
+    setUpAll(() async {
+      session = await Session.open();
     });
 
     tearDownAll(() {
       session.close();
     });
 
-    test('Publisher declared with CongestionControl.drop does not throw', () {
+    // `.block` rather than `.drop`: drop is `declarePublisher`'s own default
+    // (session.dart), so passing it explicitly produces a call byte-identical
+    // to the plain-declare smoke test one group up -- the test could not fail
+    // for the reason its name gives. `.block` is the discriminating leg, and
+    // nothing else in this file declares with it.
+    test('Publisher declared with CongestionControl.block does not throw', () {
       final publisher = session.declarePublisher(
         'demo/qos',
-        congestionControl: CongestionControl.drop,
+        congestionControl: CongestionControl.block,
       );
       expect(publisher, isA<Publisher>());
       publisher.close();
@@ -396,7 +400,6 @@ void main() {
       final publisher = session.declarePublisher(
         'demo/full',
         encoding: Encoding.applicationJson,
-        congestionControl: CongestionControl.drop,
         priority: Priority.interactiveHigh,
         enableMatchingListener: true,
       );
@@ -411,15 +414,24 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17454"]');
-      session1 = Session.open(config: config1);
+      // Scouting off: `hasMatchingSubscribers` is a network-wide question, so
+      // the false-case below is only a real negative if this session cannot
+      // discover anything beyond the peer it is paired with. With multicast on
+      // it green-lit whenever the LAN happened to be quiet -- any wildcard
+      // subscriber elsewhere on the network flips it.
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17454"]')
+        ..insertJson5('scouting/multicast/enabled', 'false')
+        ..insertJson5('scouting/gossip/enabled', 'false');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17454"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17454"]')
+        ..insertJson5('scouting/multicast/enabled', 'false')
+        ..insertJson5('scouting/gossip/enabled', 'false');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -470,10 +482,9 @@ void main() {
     test('hasMatchingSubscribers after close throws StateError', () {
       final publisher = session1.declarePublisher(
         'zenoh/dart/test/match-closed',
-      );
-      publisher.close();
+      )..close();
       expect(
-        () => publisher.hasMatchingSubscribers(),
+        publisher.hasMatchingSubscribers,
         throwsA(isA<StateError>()),
       );
     });
@@ -482,8 +493,8 @@ void main() {
   group('Publisher isExpress option', () {
     late Session session;
 
-    setUpAll(() {
-      session = Session.open();
+    setUpAll(() async {
+      session = await Session.open();
     });
 
     tearDownAll(() {
@@ -511,15 +522,15 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17510"]');
-      session1 = Session.open(config: config1);
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17510"]');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17510"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17510"]');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -560,15 +571,15 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17455"]');
-      session1 = Session.open(config: config1);
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17455"]');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17455"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17455"]');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -614,7 +625,7 @@ void main() {
         final gotFalse = Completer<void>();
         publisher.matchingStatus!.listen((status) {
           statuses.add(status);
-          if (status == false && statuses.length > 1) {
+          if (!status && statuses.length > 1) {
             if (!gotFalse.isCompleted) gotFalse.complete();
           }
         });
@@ -651,5 +662,139 @@ void main() {
 
       await doneCompleter.future.timeout(const Duration(seconds: 5));
     });
+  });
+
+  group('Publisher put/delete timestamp (send)', () {
+    late Session session1;
+    late Session session2;
+
+    setUpAll(() async {
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17536"]');
+      session1 = await Session.open(config: config1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17536"]');
+      session2 = await Session.open(config: config2);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+    });
+
+    tearDownAll(() {
+      session2.close();
+      session1.close();
+    });
+
+    test('Publisher.put timestamp round-trips bit-exact', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/pub/ts');
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher('zenoh/dart/pub/ts');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final ts = session1.newTimestamp();
+      publisher.put('hello from pub', timestamp: ts);
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.timestamp, isNotNull);
+      expect(sample.timestamp, equals(ts));
+      // NTP64 time AND id bit-exact (the whole 24 bytes).
+      expect(sample.timestamp!.time, equals(ts.time));
+      expect(sample.timestamp!.id, equals(ts.id));
+    });
+
+    test('Publisher.deleteResource carries a timestamp', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/pub/del-ts');
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher('zenoh/dart/pub/del-ts');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final ts = session1.newTimestamp();
+      publisher.deleteResource(timestamp: ts);
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.kind, equals(SampleKind.delete));
+      expect(sample.timestamp, equals(ts));
+    });
+
+    test('Publisher.put natural session timestamp (>2^62) round-trips '
+        'with no narrowing', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/pub/ts-u64');
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher('zenoh/dart/pub/ts-u64');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      final ts = session1.newTimestamp();
+      // The natural NTP64 time today has bit 62 set (a large positive int):
+      // proves the wire path conveys the full unsigned-64 with no
+      // clamp/narrow/stringify. (The >2^63 sign-bit case is documented
+      // not-injectable-via-canon and is not tested here.)
+      expect(ts.time & (1 << 62) != 0, isTrue);
+
+      publisher.put('u64 fidelity', timestamp: ts);
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.timestamp, isNotNull);
+      expect(sample.timestamp!.time, equals(ts.time));
+    });
+
+    test('Publisher.put without a timestamp yields null on receive', () async {
+      final subscriber = session2.declareSubscriber('zenoh/dart/pub/no-ts');
+      addTearDown(subscriber.close);
+      final publisher = session1.declarePublisher('zenoh/dart/pub/no-ts');
+      addTearDown(publisher.close);
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      publisher.put('no timestamp');
+
+      final sample = await subscriber.stream.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(sample.timestamp, isNull);
+    });
+
+    test(
+      'Publisher.putBytes accepts the same timestamp param (bit-exact)',
+      () async {
+        final subscriber = session2.declareSubscriber(
+          'zenoh/dart/pub/bytes-ts',
+        );
+        addTearDown(subscriber.close);
+        final publisher = session1.declarePublisher('zenoh/dart/pub/bytes-ts');
+        addTearDown(publisher.close);
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        final ts = session1.newTimestamp();
+        publisher.putBytes(ZBytes.fromString('hello bytes'), timestamp: ts);
+
+        final sample = await subscriber.stream.first.timeout(
+          const Duration(seconds: 5),
+        );
+
+        expect(sample.timestamp, isNotNull);
+        expect(sample.timestamp, equals(ts));
+        expect(sample.timestamp!.time, equals(ts.time));
+        expect(sample.timestamp!.id, equals(ts.id));
+      },
+    );
   });
 }

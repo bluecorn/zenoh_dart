@@ -1,35 +1,37 @@
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
+// canon's `z_scout.c` takes no arguments at all -- it does not include
+// `parse_args.h`. The common block is offered here anyway (an addition, not a
+// divergence in behaviour) so that pointing the scout at a specific transport
+// or disabling multicast does not require editing the file.
+const helpText = '''
+    Usage: z_scout [OPTIONS]
+
+    Options:
+''';
+
 Future<void> main(List<String> arguments) async {
-  final parser = ArgParser()
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
-
-  final results = parser.parse(arguments);
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
   Zenoh.initLog('error');
 
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
+  final parser = ArgParser();
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final config = buildConfig(results);
 
   print('Scouting...');
   final hellos = await Zenoh.scout(config: config);
 
+  hellos.forEach(print);
+
+  // canon prints these from the closure's drop handler, after the scout ends.
+  print('Dropping scout');
   if (hellos.isEmpty) {
     print('Did not find any zenoh process.');
-  } else {
-    for (final hello in hellos) {
-      print(hello);
-    }
   }
 }

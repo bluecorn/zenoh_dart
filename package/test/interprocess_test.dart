@@ -4,6 +4,15 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'helpers/cli_process.dart';
+
+/// The Dart executable running this suite.
+///
+/// Spawning `fvm` hardcodes a tool that need not be on PATH, and resolves a
+/// *different* Dart than the one running the test.
+/// `Platform.resolvedExecutable` is the SDK we are already inside.
+final String _dartExe = Platform.resolvedExecutable;
+
 /// Starts the interprocess_connect helper in the given mode.
 ///
 /// Returns the [Process] after the ready signal has been received.
@@ -14,9 +23,8 @@ Future<Process> _startHelper({
   Map<String, String>? environment,
 }) async {
   final helper = await Process.start(
-    'fvm',
+    _dartExe,
     [
-      'dart',
       'run',
       'test/helpers/interprocess_connect.dart',
       mode,
@@ -28,6 +36,7 @@ Future<Process> _startHelper({
     workingDirectory: '.',
     environment: environment,
   );
+  addTearDown(() => forceKill(helper));
 
   final readySignal = mode == '--listen' ? 'LISTENING' : 'CONNECTED';
   final stdoutLines = helper.stdout
@@ -35,7 +44,7 @@ Future<Process> _startHelper({
       .transform(const LineSplitter());
   await stdoutLines
       .firstWhere((line) => line.contains(readySignal))
-      .timeout(Duration(seconds: 15));
+      .timeout(const Duration(seconds: 15));
 
   return helper;
 }
@@ -57,7 +66,7 @@ void main() {
       );
 
       final connectorExit = await connector.exitCode.timeout(
-        Duration(seconds: 15),
+        const Duration(seconds: 15),
       );
       expect(
         connectorExit,
@@ -66,7 +75,7 @@ void main() {
       );
 
       final listenerExit = await listener.exitCode.timeout(
-        Duration(seconds: 20),
+        const Duration(seconds: 20),
       );
       expect(
         listenerExit,
@@ -75,45 +84,12 @@ void main() {
       );
     });
 
-    test('both processes exit with code 0', () async {
-      const port = '19002';
-
-      final listener = await _startHelper(
-        mode: '--listen',
-        port: port,
-        duration: 8,
-      );
-      final connector = await _startHelper(
-        mode: '--connect',
-        port: port,
-        duration: 3,
-      );
-
-      final connectorExit = await connector.exitCode.timeout(
-        Duration(seconds: 15),
-      );
-      final listenerExit = await listener.exitCode.timeout(
-        Duration(seconds: 20),
-      );
-
-      expect(
-        connectorExit,
-        equals(0),
-        reason: 'Connector should exit cleanly (no SIGSEGV/SIGBUS)',
-      );
-      expect(
-        listenerExit,
-        equals(0),
-        reason: 'Listener should exit cleanly (no SIGSEGV/SIGBUS)',
-      );
-    });
-
     test('connection works without LD_LIBRARY_PATH or LD_PRELOAD', () async {
       const port = '19003';
 
-      final env = Map<String, String>.from(Platform.environment);
-      env.remove('LD_LIBRARY_PATH');
-      env.remove('LD_PRELOAD');
+      final env = Map<String, String>.from(Platform.environment)
+        ..remove('LD_LIBRARY_PATH')
+        ..remove('LD_PRELOAD');
 
       final listener = await _startHelper(
         mode: '--listen',
@@ -129,10 +105,10 @@ void main() {
       );
 
       final connectorExit = await connector.exitCode.timeout(
-        Duration(seconds: 15),
+        const Duration(seconds: 15),
       );
       final listenerExit = await listener.exitCode.timeout(
-        Duration(seconds: 20),
+        const Duration(seconds: 20),
       );
 
       expect(connectorExit, equals(0));
@@ -152,7 +128,7 @@ void main() {
 
         // No connector — just verify the listener exits on its own
         final listenerExit = await listener.exitCode.timeout(
-          Duration(seconds: 15),
+          const Duration(seconds: 15),
         );
         expect(
           listenerExit,
@@ -174,8 +150,7 @@ void main() {
       String payload = 'hello',
       int count = 1,
     }) async {
-      final process = await Process.start('fvm', [
-        'dart',
+      final process = await Process.start(_dartExe, [
         'run',
         'test/helpers/interprocess_pubsub.dart',
         '--mode',
@@ -189,6 +164,7 @@ void main() {
         '--count',
         '$count',
       ], workingDirectory: '.');
+      addTearDown(() => forceKill(process));
 
       final output = <String>[];
       final readyCompleter = Completer<void>();
@@ -212,7 +188,7 @@ void main() {
             // ignore stderr but don't let it block
           });
 
-      await readyCompleter.future.timeout(Duration(seconds: 15));
+      await readyCompleter.future.timeout(const Duration(seconds: 15));
       return (process: process, output: output);
     }
 
@@ -228,7 +204,6 @@ void main() {
           mode: 'sub',
           port: port,
           key: key,
-          count: 1,
         );
 
         // Start publisher (connector)
@@ -237,16 +212,15 @@ void main() {
           port: port,
           key: key,
           payload: payload,
-          count: 1,
         );
 
         final pubExit = await pub.process.exitCode.timeout(
-          Duration(seconds: 20),
+          const Duration(seconds: 20),
         );
         expect(pubExit, equals(0), reason: 'Publisher should exit cleanly');
 
         final subExit = await sub.process.exitCode.timeout(
-          Duration(seconds: 20),
+          const Duration(seconds: 20),
         );
         expect(subExit, equals(0), reason: 'Subscriber should exit cleanly');
 
@@ -269,7 +243,6 @@ void main() {
         mode: 'sub',
         port: port,
         key: key,
-        count: 1,
       );
 
       final pub = await startPubsubHelper(
@@ -277,13 +250,16 @@ void main() {
         port: port,
         key: key,
         payload: payload,
-        count: 1,
       );
 
-      final pubExit = await pub.process.exitCode.timeout(Duration(seconds: 20));
+      final pubExit = await pub.process.exitCode.timeout(
+        const Duration(seconds: 20),
+      );
       expect(pubExit, equals(0));
 
-      final subExit = await sub.process.exitCode.timeout(Duration(seconds: 20));
+      final subExit = await sub.process.exitCode.timeout(
+        const Duration(seconds: 20),
+      );
       expect(subExit, equals(0));
 
       // Verify subscriber received the exact payload string
@@ -294,13 +270,21 @@ void main() {
             'Subscriber should have received "$payload", got: ${sub.output}',
       );
 
-      // Verify the BYTES line shows the UTF-8 encoding of "deadbeef"
-      // "deadbeef" in UTF-8 hex is: 64656164626565660a (without newline)
-      // Actually just 6465616462656566
+      // Verify the BYTES line carries the exact bytes, not merely that a BYTES
+      // line exists. The helper hex-dumps `sample.payloadBytes`, so comparing
+      // the value is what makes this test about byte fidelity across the
+      // process boundary; asserting only the prefix leaves the purpose-built
+      // instrument unread and passes on any corruption.
+      final expectedHex = utf8
+          .encode(payload)
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
       expect(
-        sub.output.any((line) => line.startsWith('BYTES:')),
-        isTrue,
-        reason: 'Subscriber should have printed BYTES line',
+        sub.output,
+        contains('BYTES:$expectedHex'),
+        reason:
+            'Subscriber should have printed the exact payload bytes, '
+            'got: ${sub.output}',
       );
     });
 
@@ -328,12 +312,12 @@ void main() {
         );
 
         final pubExit = await pub.process.exitCode.timeout(
-          Duration(seconds: 30),
+          const Duration(seconds: 30),
         );
         expect(pubExit, equals(0), reason: 'Publisher should exit cleanly');
 
         final subExit = await sub.process.exitCode.timeout(
-          Duration(seconds: 30),
+          const Duration(seconds: 30),
         );
         expect(subExit, equals(0), reason: 'Subscriber should exit cleanly');
 

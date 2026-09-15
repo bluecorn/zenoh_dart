@@ -11,8 +11,8 @@ void main() {
   group('Querier lifecycle', () {
     late Session session;
 
-    setUpAll(() {
-      session = Session.open();
+    setUpAll(() async {
+      session = await Session.open();
     });
 
     tearDownAll(() {
@@ -33,18 +33,17 @@ void main() {
 
     test('Querier.close completes without error', () {
       final querier = session.declareQuerier('demo/example/querier');
-      expect(() => querier.close(), returnsNormally);
+      expect(querier.close, returnsNormally);
     });
 
     test('Querier.close is idempotent', () {
-      final querier = session.declareQuerier('demo/example/querier');
-      querier.close();
-      expect(() => querier.close(), returnsNormally);
+      final querier = session.declareQuerier('demo/example/querier')..close();
+      expect(querier.close, returnsNormally);
     });
 
-    test('declareQuerier on closed session throws StateError', () {
-      final closedSession = Session.open();
-      closedSession.close();
+    test('declareQuerier on closed session throws StateError', () async {
+      final closedSession = await Session.open()
+        ..close();
       expect(
         () => closedSession.declareQuerier('demo/example/querier'),
         throwsA(
@@ -85,16 +84,16 @@ void main() {
     late Session sessionB;
 
     setUp(() async {
-      sessionA = Session.open(
+      sessionA = await Session.open(
         config: Config()
           ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17490"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
-      sessionB = Session.open(
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
         config: Config()
           ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17490"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
 
     tearDown(() async {
@@ -107,15 +106,16 @@ void main() {
       addTearDown(queryable.close);
 
       queryable.stream.listen((query) {
-        query.reply('zenoh/dart/test/qr/basic', 'hello from queryable');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr/basic', 'hello from queryable')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/basic',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -137,22 +137,23 @@ void main() {
 
         queryable.stream.listen((query) {
           receivedParams.complete(query.parameters);
-          query.reply('zenoh/dart/test/qr/params', 'ok');
-          query.dispose();
+          query
+            ..reply('zenoh/dart/test/qr/params', 'ok')
+            ..dispose();
         });
 
-        await Future.delayed(Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
         final querier = sessionB.declareQuerier(
           'zenoh/dart/test/qr/params',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
         );
         addTearDown(querier.close);
 
         await querier.get(parameters: 'key=value').toList();
 
         final params = await receivedParams.future.timeout(
-          Duration(seconds: 5),
+          const Duration(seconds: 5),
         );
         expect(params, equals('key=value'));
       },
@@ -163,12 +164,12 @@ void main() {
       () async {
         final querier = sessionB.declareQuerier(
           'zenoh/dart/test/qr/timeout',
-          timeout: Duration(seconds: 1),
+          timeout: const Duration(seconds: 1),
         );
         addTearDown(querier.close);
 
         final replies = await querier.get().toList().timeout(
-          Duration(seconds: 5),
+          const Duration(seconds: 5),
         );
 
         expect(replies, isEmpty);
@@ -182,15 +183,16 @@ void main() {
       var queryCount = 0;
       queryable.stream.listen((query) {
         queryCount++;
-        query.reply('zenoh/dart/test/qr/repeat', 'reply-$queryCount');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr/repeat', 'reply-$queryCount')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/repeat',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -210,20 +212,21 @@ void main() {
         addTearDown(queryable.close);
 
         queryable.stream.listen((query) {
-          query.replyBytes(
-            'zenoh/dart/test/qr/binreply',
-            ZBytes.fromUint8List(
-              Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
-            ),
-          );
-          query.dispose();
+          query
+            ..replyBytes(
+              'zenoh/dart/test/qr/binreply',
+              ZBytes.fromUint8List(
+                Uint8List.fromList([0x00, 0xFF, 0xFE, 0x80, 0x41]),
+              ),
+            )
+            ..dispose();
         });
 
-        await Future.delayed(Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
         final querier = sessionB.declareQuerier(
           'zenoh/dart/test/qr/binreply',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
         );
         addTearDown(querier.close);
 
@@ -242,12 +245,11 @@ void main() {
     test('querier get after close throws StateError', () {
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/closed',
-        timeout: Duration(seconds: 5),
-      );
-      querier.close();
+        timeout: const Duration(seconds: 5),
+      )..close();
 
       expect(
-        () => querier.get(),
+        querier.get,
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
@@ -264,16 +266,16 @@ void main() {
     late Session sessionB;
 
     setUp(() async {
-      sessionA = Session.open(
+      sessionA = await Session.open(
         config: Config()
           ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17491"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
-      sessionB = Session.open(
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
         config: Config()
           ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17491"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
 
     tearDown(() async {
@@ -292,15 +294,16 @@ void main() {
 
         queryable.stream.listen((query) {
           receivedPayload.complete(query.payloadBytes);
-          query.reply('zenoh/dart/test/qr/payload', 'ack');
-          query.dispose();
+          query
+            ..reply('zenoh/dart/test/qr/payload', 'ack')
+            ..dispose();
         });
 
-        await Future.delayed(Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
         final querier = sessionB.declareQuerier(
           'zenoh/dart/test/qr/payload',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
         );
         addTearDown(querier.close);
 
@@ -308,7 +311,7 @@ void main() {
         await querier.get(payload: payload).toList();
 
         final received = await receivedPayload.future.timeout(
-          Duration(seconds: 5),
+          const Duration(seconds: 5),
         );
         expect(received, isNotNull);
         expect(received, equals(Uint8List.fromList([1, 2, 3])));
@@ -322,15 +325,16 @@ void main() {
       addTearDown(queryable.close);
 
       queryable.stream.listen((query) {
-        query.reply('zenoh/dart/test/qr/consumed', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr/consumed', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/consumed',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -347,19 +351,20 @@ void main() {
       addTearDown(queryable.close);
 
       queryable.stream.listen((query) {
-        query.reply(
-          'zenoh/dart/test/qr/encoding',
-          '{"status":"ok"}',
-          encoding: Encoding.applicationJson,
-        );
-        query.dispose();
+        query
+          ..reply(
+            'zenoh/dart/test/qr/encoding',
+            '{"status":"ok"}',
+            encoding: Encoding.applicationJson,
+          )
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/encoding',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -379,22 +384,23 @@ void main() {
 
       queryable.stream.listen((query) {
         receivedPayload.complete(query.payloadBytes);
-        query.reply('zenoh/dart/test/qr/nopayload', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr/nopayload', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/nopayload',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
       await querier.get().toList();
 
       final received = await receivedPayload.future.timeout(
-        Duration(seconds: 5),
+        const Duration(seconds: 5),
       );
       expect(received, isNull);
     });
@@ -408,21 +414,24 @@ void main() {
 
       queryable.stream.listen((query) {
         receivedParams.complete(query.parameters);
-        query.reply('zenoh/dart/test/qr/emptyparams', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr/emptyparams', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr/emptyparams',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
       await querier.get().toList();
 
-      final params = await receivedParams.future.timeout(Duration(seconds: 5));
+      final params = await receivedParams.future.timeout(
+        const Duration(seconds: 5),
+      );
       expect(params, equals(''));
     });
   });
@@ -432,15 +441,23 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17492"]');
-      session1 = Session.open(config: config1);
+      // Scouting off: `hasMatchingQueryables` is a network-wide question, so
+      // the false-case below is only a real negative if this session cannot
+      // discover anything beyond the peer it is paired with. With multicast on
+      // its green only proved the LAN was quiet.
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17492"]')
+        ..insertJson5('scouting/multicast/enabled', 'false')
+        ..insertJson5('scouting/gossip/enabled', 'false');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17492"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17492"]')
+        ..insertJson5('scouting/multicast/enabled', 'false')
+        ..insertJson5('scouting/gossip/enabled', 'false');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -455,7 +472,7 @@ void main() {
       () async {
         final querier = session1.declareQuerier(
           'zenoh/dart/test/qrmatch/none',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
         );
         addTearDown(querier.close);
 
@@ -472,7 +489,7 @@ void main() {
       addTearDown(queryable.close);
       final querier = session1.declareQuerier(
         'zenoh/dart/test/qrmatch/yes',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -484,10 +501,9 @@ void main() {
     test('hasMatchingQueryables after close throws StateError', () {
       final querier = session1.declareQuerier(
         'zenoh/dart/test/qrmatch/closed',
-        timeout: Duration(seconds: 5),
-      );
-      querier.close();
-      expect(() => querier.hasMatchingQueryables(), throwsA(isA<StateError>()));
+        timeout: const Duration(seconds: 5),
+      )..close();
+      expect(querier.hasMatchingQueryables, throwsA(isA<StateError>()));
     });
   });
 
@@ -496,15 +512,15 @@ void main() {
     late Session session2;
 
     setUpAll(() async {
-      final config1 = Config();
-      config1.insertJson5('listen/endpoints', '["tcp/127.0.0.1:17493"]');
-      session1 = Session.open(config: config1);
+      final config1 = Config()
+        ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17493"]');
+      session1 = await Session.open(config: config1);
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
-      final config2 = Config();
-      config2.insertJson5('connect/endpoints', '["tcp/127.0.0.1:17493"]');
-      session2 = Session.open(config: config2);
+      final config2 = Config()
+        ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17493"]');
+      session2 = await Session.open(config: config2);
 
       await Future<void>.delayed(const Duration(seconds: 1));
     });
@@ -517,7 +533,7 @@ void main() {
     test('matchingStatus is null when listener not enabled', () {
       final querier = session1.declareQuerier(
         'zenoh/dart/test/qrmatch/null',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
       expect(querier.matchingStatus, isNull);
@@ -526,7 +542,7 @@ void main() {
     test('matchingStatus stream emits true when queryable appears', () async {
       final querier = session1.declareQuerier(
         'zenoh/dart/test/qrmatch/stream',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
         enableMatchingListener: true,
       );
       addTearDown(querier.close);
@@ -552,7 +568,7 @@ void main() {
       () async {
         final querier = session1.declareQuerier(
           'zenoh/dart/test/qrmatch/stream2',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
           enableMatchingListener: true,
         );
         addTearDown(querier.close);
@@ -561,7 +577,7 @@ void main() {
         final gotFalse = Completer<void>();
         querier.matchingStatus!.listen((status) {
           statuses.add(status);
-          if (status == false && statuses.length > 1) {
+          if (!status && statuses.length > 1) {
             if (!gotFalse.isCompleted) gotFalse.complete();
           }
         });
@@ -585,7 +601,7 @@ void main() {
     test('matchingStatus stream closes when querier is closed', () async {
       final querier = session1.declareQuerier(
         'zenoh/dart/test/qrmatch/close',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
         enableMatchingListener: true,
       );
 
@@ -604,16 +620,16 @@ void main() {
     late Session sessionB;
 
     setUp(() async {
-      sessionA = Session.open(
+      sessionA = await Session.open(
         config: Config()
           ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17494"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
-      sessionB = Session.open(
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
         config: Config()
           ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17494"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
 
     tearDown(() async {
@@ -630,15 +646,16 @@ void main() {
 
       queryable.stream.listen((query) {
         receivedAttachment.complete(query.attachmentBytes);
-        query.reply('zenoh/dart/test/qr7/attach', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr7/attach', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr7/attach',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -651,7 +668,7 @@ void main() {
           .toList();
 
       final received = await receivedAttachment.future.timeout(
-        Duration(seconds: 5),
+        const Duration(seconds: 5),
       );
       expect(received, isNotNull);
       expect(received, equals(Uint8List.fromList([0xFF, 0xFE, 0x80])));
@@ -675,15 +692,16 @@ void main() {
         final params = query.parameters;
         results[params] = query.payloadBytes;
         completers[params]?.complete();
-        query.reply('zenoh/dart/test/qr7/matrix', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr7/matrix', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr7/matrix',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -706,7 +724,7 @@ void main() {
 
       await Future.wait(
         completers.values.map((c) => c.future),
-      ).timeout(Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 10));
 
       expect(results['valid'], equals(validBytes));
       expect(results['invalid'], equals(invalidBytes));
@@ -738,14 +756,15 @@ void main() {
         );
         addTearDown(queryable.close);
         queryable.stream.listen((q) {
-          q.reply('zenoh/dart/test/qr7/consume', 'ack');
-          q.dispose();
+          q
+            ..reply('zenoh/dart/test/qr7/consume', 'ack')
+            ..dispose();
         });
-        await Future.delayed(Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
         final querier = sessionB.declareQuerier(
           'zenoh/dart/test/qr7/consume',
-          timeout: Duration(seconds: 5),
+          timeout: const Duration(seconds: 5),
         );
         addTearDown(querier.close);
 
@@ -760,7 +779,7 @@ void main() {
 
         // Both moved into zenoh-c (gravestoned) -- use-after-move must throw.
         expect(
-          () => payload.toBytes(),
+          payload.toBytes,
           throwsA(
             isA<StateError>().having(
               (e) => e.message,
@@ -770,7 +789,7 @@ void main() {
           ),
         );
         expect(
-          () => attachment.toBytes(),
+          attachment.toBytes,
           throwsA(
             isA<StateError>().having(
               (e) => e.message,
@@ -798,15 +817,16 @@ void main() {
       queryable.stream.listen((query) {
         results[query.parameters] = query.attachmentBytes;
         completers[query.parameters]?.complete();
-        query.reply('zenoh/dart/test/qr7/emptyattach', 'ack');
-        query.dispose();
+        query
+          ..reply('zenoh/dart/test/qr7/emptyattach', 'ack')
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/qr7/emptyattach',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
@@ -820,7 +840,7 @@ void main() {
 
       await Future.wait(
         completers.values.map((c) => c.future),
-      ).timeout(Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 10));
 
       // empty attachment -> non-null empty bytes.
       expect(results['empty'], isNotNull);
@@ -835,16 +855,16 @@ void main() {
     late Session sessionB;
 
     setUp(() async {
-      sessionA = Session.open(
+      sessionA = await Session.open(
         config: Config()
           ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17495"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
-      sessionB = Session.open(
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
         config: Config()
           ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17495"]'),
       );
-      await Future.delayed(Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
 
     tearDown(() async {
@@ -859,26 +879,27 @@ void main() {
       addTearDown(queryable.close);
 
       queryable.stream.listen((query) {
-        query.replyBytes(
-          'zenoh/dart/test/q8r/attach',
-          ZBytes.fromString('ok'),
-          attachment: ZBytes.fromUint8List(
-            Uint8List.fromList([0xFF, 0xFE, 0x80]),
-          ),
-        );
-        query.dispose();
+        query
+          ..replyBytes(
+            'zenoh/dart/test/q8r/attach',
+            ZBytes.fromString('ok'),
+            attachment: ZBytes.fromUint8List(
+              Uint8List.fromList([0xFF, 0xFE, 0x80]),
+            ),
+          )
+          ..dispose();
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final querier = sessionB.declareQuerier(
         'zenoh/dart/test/q8r/attach',
-        timeout: Duration(seconds: 5),
+        timeout: const Duration(seconds: 5),
       );
       addTearDown(querier.close);
 
       final replies = await querier.get().toList().timeout(
-        Duration(seconds: 5),
+        const Duration(seconds: 5),
       );
 
       expect(replies, isNotEmpty);
@@ -887,6 +908,358 @@ void main() {
         replies.first.ok.attachmentBytes,
         equals(Uint8List.fromList([0xFF, 0xFE, 0x80])),
       );
+    });
+  });
+
+  // Slice 4: reply-ok metadata exposure via the Querier path. The querier
+  // re-implements reply parsing inline (it does not reuse Session's parser),
+  // so this proves the independent querier parse site was updated too. Per N3
+  // assert EXPOSURE (populated defaults, not dropped) + null timestamp on a
+  // plain reply.
+  group('Slice 4: Querier reply-ok metadata exposure (TCP 17534)', () {
+    late Session sessionA;
+    late Session sessionB;
+
+    setUp(() async {
+      sessionA = await Session.open(
+        config: Config()
+          ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:17534"]'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
+        config: Config()
+          ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:17534"]'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    });
+
+    tearDown(() async {
+      sessionB.close();
+      sessionA.close();
+    });
+
+    // Test 2: a Querier reply-ok exposes priority/congestion/express
+    // (non-null defaults) and a null timestamp on a plain reply.
+    test('querier reply-ok exposes all four metadata fields', () async {
+      final queryable = sessionA.declareQueryable('zenoh/dart/test/q4r/meta');
+      addTearDown(queryable.close);
+
+      queryable.stream.listen((query) {
+        query
+          ..reply('zenoh/dart/test/q4r/meta', 'reply-value')
+          ..dispose();
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      final querier = sessionB.declareQuerier(
+        'zenoh/dart/test/q4r/meta',
+        timeout: const Duration(seconds: 5),
+      );
+      addTearDown(querier.close);
+
+      final replies = await querier.get().toList().timeout(
+        const Duration(seconds: 5),
+      );
+
+      expect(replies, isNotEmpty);
+      expect(replies.first.isOk, isTrue);
+      final sample = replies.first.ok;
+      expect(sample.payload, equals('reply-value'));
+      // Values, not `isNotNull` -- see the get-side twin in
+      // get_queryable_test.dart for the full reasoning. Short form: the three
+      // fields are non-nullable with constructor defaults, so `isNotNull`
+      // could not fail; congestionControl is the discriminating pin (a reply
+      // arrives BLOCK, not the constructor's drop), while priority and express
+      // are default-echo pins that catch a mis-indexed enum, not a dropped
+      // field. This is what makes the test able to prove what its comment
+      // claims -- that the querier's independent parse site was updated.
+      expect(sample.congestionControl, equals(CongestionControl.block));
+      expect(sample.priority, equals(Priority.data));
+      expect(sample.express, isFalse);
+      expect(sample.timestamp, isNull);
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Seed #6 Slice 1: the timeout-zero contract at querier declaration.
+  //
+  // A querier's timeout is fixed at DECLARATION time (canon's per-get options
+  // struct carries no timeout field), so the refusal has to land there. One
+  // public contract that rejects zero on `Session.get` and silently substitutes
+  // on its querier sibling would be worse than either rule alone.
+  group('Slice 1: the timeout-zero contract on declareQuerier', () {
+    late Session session;
+
+    setUpAll(() async {
+      session = await Session.open(
+        config: Config()
+          ..insertJson5('scouting/multicast/enabled', 'false')
+          ..insertJson5('scouting/gossip/enabled', 'false'),
+      );
+    });
+
+    tearDownAll(() {
+      session.close();
+    });
+
+    test('Duration.zero is refused before any native declaration', () {
+      expect(
+        () => session.declareQuerier(
+          'zenoh/dart/test/s1/querier-zero',
+          timeout: Duration.zero,
+        ),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', equals('timeout')),
+        ),
+      );
+    });
+
+    test('a positive sub-millisecond timeout is refused on the wire value', () {
+      // Same wire-value keying as Session.get: inMilliseconds == 0 is the
+      // collapse onto canon's config-default sentinel, whatever Duration
+      // constructor produced it.
+      expect(
+        () => session.declareQuerier(
+          'zenoh/dart/test/s1/querier-submilli',
+          timeout: const Duration(microseconds: 500),
+        ),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', equals('timeout')),
+        ),
+      );
+    });
+
+    test('a positive millisecond-representable timeout is accepted', () {
+      // The control: the guard rejects the sentinel collapse and nothing else.
+      final querier = session.declareQuerier(
+        'zenoh/dart/test/s1/querier-ok',
+        timeout: const Duration(milliseconds: 1),
+      );
+      addTearDown(querier.close);
+      expect(querier.keyExpr, equals('zenoh/dart/test/s1/querier-ok'));
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Slice 16: the querier's channel-mode carrier.
+  //
+  // A THIN carrier: it reuses the same handler type, the same tee, the same
+  // shared channel-construction body, the same extraction body and the same
+  // `PullReplies` class as `Session.pullGet`. Only which canon entry is called
+  // and which options struct is filled differ, so the cells here are the
+  // stated smoke allocation rather than a second full matrix — a defect in the
+  // shared machinery fails on the full-matrix carrier, and these target the
+  // thin wiring.
+  group('Slice 16: Querier.pullGet (TCP 19380)', () {
+    late Session sessionA;
+    late Session sessionB;
+
+    setUp(() async {
+      sessionA = await Session.open(
+        config: Config()
+          ..insertJson5('listen/endpoints', '["tcp/127.0.0.1:19380"]')
+          ..insertJson5('scouting/multicast/enabled', 'false')
+          ..insertJson5('scouting/gossip/enabled', 'false'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      sessionB = await Session.open(
+        config: Config()
+          ..insertJson5('connect/endpoints', '["tcp/127.0.0.1:19380"]')
+          ..insertJson5('scouting/multicast/enabled', 'false')
+          ..insertJson5('scouting/gossip/enabled', 'false'),
+      );
+      await Future<void>.delayed(const Duration(seconds: 1));
+    });
+
+    tearDown(() {
+      sessionB.close();
+      sessionA.close();
+    });
+
+    /// A queryable that answers once and finalises.
+    void replyOnce(String key, {String payload = 'querier-answer'}) {
+      final queryable = sessionA.declareQueryable(key);
+      addTearDown(queryable.close);
+      queryable.stream.listen((query) {
+        query
+          ..reply(key, payload)
+          ..dispose();
+      });
+    }
+
+    Future<RecvResult<Reply>> pollFirst(PullReplies replies) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      var last = replies.tryRecv();
+      while (last is RecvEmpty<Reply> && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        last = replies.tryRecv();
+      }
+      return last;
+    }
+
+    test('a querier delivers replies through a fifo channel', () async {
+      const key = 'zenoh/dart/test/s16/querier/fifo';
+      replyOnce(key);
+      final querier = sessionB.declareQuerier(
+        key,
+        consolidation: ConsolidationMode.none,
+      );
+      addTearDown(querier.close);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      final replies = querier.pullGet(kind: ChannelKind.fifo, capacity: 4);
+      addTearDown(replies.dispose);
+
+      final first = await pollFirst(replies);
+      expect(first, isA<RecvData<Reply>>());
+      expect(
+        (first as RecvData<Reply>).value.ok.payload,
+        equals('querier-answer'),
+      );
+
+      // ...and the channel reaches its terminal state at query completion.
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      var terminal = replies.tryRecv();
+      while (terminal is! RecvDisconnected<Reply> &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        terminal = replies.tryRecv();
+      }
+      expect(terminal, isA<RecvDisconnected<Reply>>());
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('a querier delivers through a ring channel while in flight', () async {
+      const key = 'zenoh/dart/test/s16/querier/ring';
+      // Held open, so the channel stays connected while the poll runs -- a ring
+      // discards its buffer at disconnect, so polling after completion would
+      // recover nothing.
+      final held = <Query>[];
+      final queryable = sessionA.declareQueryable(key);
+      addTearDown(queryable.close);
+      queryable.stream.listen((query) {
+        query.reply(key, 'in-flight');
+        held.add(query);
+      });
+      addTearDown(() {
+        for (final q in held) {
+          q.dispose();
+        }
+      });
+
+      final querier = sessionB.declareQuerier(
+        key,
+        consolidation: ConsolidationMode.none,
+      );
+      addTearDown(querier.close);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      final replies = querier.pullGet(kind: ChannelKind.ring, capacity: 4);
+      addTearDown(replies.dispose);
+
+      final first = await pollFirst(replies);
+      expect(first, isA<RecvData<Reply>>());
+      expect(
+        (first as RecvData<Reply>).value.ok.payload,
+        equals('in-flight'),
+      );
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test("pullGet carries its stream sibling's option surface", () async {
+      const key = 'zenoh/dart/test/s16/querier/options';
+      final observed =
+          Completer<
+            ({
+              String parameters,
+              Uint8List? payload,
+              Uint8List? attachment,
+              String? encoding,
+            })
+          >();
+      final queryable = sessionA.declareQueryable(key);
+      addTearDown(queryable.close);
+      queryable.stream.listen((query) {
+        if (!observed.isCompleted) {
+          observed.complete((
+            parameters: query.parameters,
+            payload: query.payloadBytes,
+            attachment: query.attachmentBytes,
+            encoding: query.encoding,
+          ));
+        }
+        query
+          ..reply(key, 'ok')
+          ..dispose();
+      });
+
+      final querier = sessionB.declareQuerier(
+        key,
+        consolidation: ConsolidationMode.none,
+      );
+      addTearDown(querier.close);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      final replies = querier.pullGet(
+        kind: ChannelKind.fifo,
+        capacity: 4,
+        // Interior NUL: the querier's send seam was rebased onto canon's
+        // length-carried sibling, and this checks the CHANNEL mode inherits it.
+        parameters: 'x=1\x00y=2',
+        payload: ZBytes.fromString('body'),
+        encoding: Encoding.applicationJson,
+        attachment: ZBytes.fromString('att'),
+      );
+      addTearDown(replies.dispose);
+
+      final seen = await observed.future.timeout(const Duration(seconds: 15));
+      expect(seen.parameters, equals('x=1\x00y=2'));
+      expect(seen.payload, equals(utf8.encode('body')));
+      expect(seen.attachment, equals(utf8.encode('att')));
+      expect(seen.encoding, equals(Encoding.applicationJson.mimeType));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test("a querier's recv() parks and wakes through the new entry", () async {
+      // The only path that exercises the tee interposition on THIS carrier's
+      // entry, which is why it is here rather than left to the shared cells.
+      const key = 'zenoh/dart/test/s16/querier/park';
+      final queryable = sessionA.declareQueryable(key);
+      addTearDown(queryable.close);
+      queryable.stream.listen((query) async {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        query
+          ..reply(key, 'late')
+          ..dispose();
+      });
+
+      final querier = sessionB.declareQuerier(
+        key,
+        consolidation: ConsolidationMode.none,
+      );
+      addTearDown(querier.close);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      final replies = querier.pullGet(kind: ChannelKind.fifo, capacity: 4);
+      addTearDown(replies.dispose);
+
+      final result = await replies.recv().timeout(const Duration(seconds: 15));
+      expect(result, isA<RecvData<Reply>>());
+      expect((result as RecvData<Reply>).value.ok.payload, equals('late'));
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('a negative capacity is refused before any native call', () async {
+      final querier = sessionB.declareQuerier('zenoh/dart/test/s16/neg');
+      addTearDown(querier.close);
+      for (final kind in ChannelKind.values) {
+        expect(
+          () => querier.pullGet(kind: kind, capacity: -1),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.name,
+              'name',
+              equals('capacity'),
+            ),
+          ),
+          reason: 'kind=$kind',
+        );
+      }
     });
   });
 }

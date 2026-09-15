@@ -10,7 +10,8 @@
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_BUILD_TYPE": "Release",
-        "ZENOH_DART_BUILD_ZENOHC": "TRUE"
+        "ZENOH_DART_BUILD_ZENOHC": "TRUE",
+        "ZENOH_DART_VARIANT": "unstable"
       }
     },
     {
@@ -21,7 +22,33 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_BUILD_TYPE": "Release",
-        "ZENOH_DART_BUILD_ZENOHC": "FALSE"
+        "ZENOH_DART_BUILD_ZENOHC": "FALSE",
+        "ZENOH_DART_VARIANT": "unstable"
+      }
+    },
+    {
+      "name": "linux-x64-stable",
+      "displayName": "Linux x86_64 — full build, STABLE variant (no SHM/unstable)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-stable",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Release",
+        "ZENOH_DART_BUILD_ZENOHC": "TRUE",
+        "ZENOH_DART_VARIANT": "stable"
+      }
+    },
+    {
+      "name": "linux-x64-stable-shim-only",
+      "displayName": "Linux x86_64 — C shim only, STABLE variant (prebuilt zenoh-c)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-stable-shim",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_BUILD_TYPE": "Release",
+        "ZENOH_DART_BUILD_ZENOHC": "FALSE",
+        "ZENOH_DART_VARIANT": "stable"
       }
     },
     {
@@ -58,6 +85,15 @@
     {
       "name": "linux-x64-shim-only",
       "configurePreset": "linux-x64-shim-only"
+    },
+    {
+      "name": "linux-x64-stable",
+      "configurePreset": "linux-x64-stable",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-x64-stable-shim-only",
+      "configurePreset": "linux-x64-stable-shim-only"
     },
     {
       "name": "android-arm64",

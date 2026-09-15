@@ -1,0 +1,41 @@
+# The zenoh core resolution every shipped libzenohc.so must embed.
+#
+# WHY THIS FILE EXISTS
+#
+# zenoh-c's Cargo.toml asks for the zenoh crates by BRANCH -- `release/1.8.0`
+# -- not by commit. A branch is not a pin: cargo resolves it to whatever the
+# branch points at on the day of the build, and the resolution is recorded
+# only in Cargo.lock. The Cargo.lock committed at zenoh-c's own 1.8.0 tag
+# names `branch=main#c3761375...`, which is neither the branch the manifest
+# asks for nor the commit our shipped libraries were built from. So a fresh
+# clone reproduces NEITHER: it re-resolves, silently, against a moving branch.
+#
+# Measured 2026-09-12, `git ls-remote https://github.com/eclipse-zenoh/zenoh.git`:
+#   refs/heads/release/1.8.0   29b3e63a311ab55f438280f3e71c6268b6f115cc
+#   refs/tags/1.8.0            c5f4ac7bacc687e95d01741031b46dbaf02415ce   (tag object)
+#   refs/tags/1.8.0^{}         29b3e63a311ab55f438280f3e71c6268b6f115cc   (peeled)
+# The branch and the peeled tag agree TODAY. The branch can move; the pin
+# below cannot.
+#
+# HOW IT IS ENFORCED -- three independent places, so a hand-edit of one is caught
+#
+#   1. build-pins/zenoh-c/**/Cargo.lock is applied into the submodule before
+#      cargo runs (scripts/apply_build_pins.sh), and cargo runs with --locked,
+#      so cargo may not re-resolve.
+#   2. apply_build_pins.sh asserts that ZENOH_CORE_COMMIT below actually
+#      appears in the lockfile it applies -- the pin file and the lockfile
+#      must agree, or the build stops.
+#   3. scripts/check_native_pins.sh reads the BUILT library and requires
+#      ZENOH_CORE_VERSION_STRING to be present in it. This is the one that
+#      matters: it is an assertion about the artifact, so it holds whatever
+#      the build did, including paths nobody thought of.
+#
+# ⛔ TO BUMP THE CORE (roadmap `[PIN]`): change the lockfiles under
+# build-pins/ and every value here TOGETHER, in one commit, and rebuild every
+# variant and target. Changing one alone fails the build by construction.
+
+ZENOH_C_TAG=1.8.0
+ZENOH_C_SUBMODULE_COMMIT=7b8478618861972b9f0115da75e694c9f0a2af5a
+ZENOH_CORE_BRANCH=release/1.8.0
+ZENOH_CORE_COMMIT=29b3e63a311ab55f438280f3e71c6268b6f115cc
+ZENOH_CORE_VERSION_STRING=v1.8.0-29b3e63a311ab55f438280f3e71c6268b6f115cc

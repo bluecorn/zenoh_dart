@@ -1,38 +1,96 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
-import 'bindings.dart' show ze_deserializer_t;
-import 'bytes.dart';
-import 'exceptions.dart';
-import 'native_lib.dart';
+import 'package:zenoh_dart/src/bindings.dart' show ze_deserializer_t;
+import 'package:zenoh_dart/src/bytes.dart';
+import 'package:zenoh_dart/src/exceptions.dart';
+import 'package:zenoh_dart/src/finalizers.dart';
+import 'package:zenoh_dart/src/native_lib.dart';
 
 /// A zenoh deserializer for reading structured payloads.
 ///
 /// Wraps `ze_deserializer_t`. Created from a [ZBytes] instance.
 /// Call [dispose] when finished to free native resources.
-class ZDeserializer {
+///
+/// This object holds a native handle, so it CANNOT cross an isolate boundary:
+/// a copy would share this one's native address while carrying its own fresh
+/// disposal flag, and the second release would be a use-after-free. Sending it
+/// throws `ArgumentError`.
+///
+/// It carries a `NativeFinalizer` safety net: if it is dropped without
+/// [dispose], its native block is released when the object is collected.
+/// ⛔ The net is not a substitute for calling [dispose] -- a finalizer runs at
+/// an unpredictable time, or not at all if the program exits first.
+///
+/// This object holds a native handle, so it **cannot cross an isolate
+/// boundary**: a copy would share this one's native address while carrying
+/// its own fresh disposal flag, and the second release would be a
+/// use-after-free. Sending it throws `ArgumentError` naming the class.
+///
+/// It carries a `NativeFinalizer` **safety net**: if it is dropped without an
+/// explicit release, its native resources are reclaimed when the object is
+/// collected.
+/// ⛔ The net is **not a substitute** for releasing it explicitly — a finalizer
+/// runs at an unpredictable time, or not at all if the program exits first.
+class ZDeserializer implements Finalizable {
+  /// Creates a deserializer from the given [bytes].
+  ///
+  /// The [bytes] must remain valid for the lifetime of this deserializer --
+  /// the deserializer holds a native cursor INTO them, not a copy. It keeps a
+  /// reference and refuses to read once the source is disposed or consumed,
+  /// so violating that is a `StateError` rather than a use-after-free.
+  ZDeserializer(ZBytes bytes) : _source = bytes, _ptr = _create(bytes) {
+    // THE NET. A deserializer dropped without [dispose] used to leak its
+    // native block for the life of the process, with no observable at all --
+    // no throw, no corruption, and every behavioural cell green either way.
+    //
+    // `detach: this` is the key: ONE `detach(this)` in [dispose] reverses this
+    // attachment, so the explicit path and the finalizer path are mutually
+    // exclusive by construction rather than by a flag.
+    //
+    // `externalSize` is the slot this finalizer frees -- the same
+    // `zd_deserializer_sizeof()` the constructor just allocated -- and nothing
+    // else. It drives GC scheduling, and canon's own heap behind the handle is
+    // opaque at this pin, so folding in a guess would make the collector race
+    // to reclaim a number nobody measured.
+    freeBlockFinalizer.attach(
+      this,
+      _ptr.cast(),
+      detach: this,
+      externalSize: bindings.zd_deserializer_sizeof(),
+    );
+  }
+
+  final ZBytes _source;
   final Pointer<ze_deserializer_t> _ptr;
   bool _disposed = false;
 
-  /// Creates a deserializer from the given [bytes].
-  ///
-  /// The [bytes] must remain valid for the lifetime of this deserializer.
-  ZDeserializer(ZBytes bytes) : _ptr = _create(bytes);
-
   static Pointer<ze_deserializer_t> _create(ZBytes bytes) {
+    // ALLOCATE-LAST: a disposed or consumed source throws StateError from
+    // nativePtr, and that used to happen with the deserializer block already
+    // allocated and nothing holding a reference to it.
+    final sourcePtr = bytes.nativePtr;
+
     final size = bindings.zd_deserializer_sizeof();
-    final Pointer<ze_deserializer_t> ptr = calloc.allocate<ze_deserializer_t>(
-      size,
-    );
-    final loaned = bindings.zd_bytes_loan(bytes.nativePtr.cast());
+    final ptr = calloc.allocate<ze_deserializer_t>(size);
+    final loaned = bindings.zd_bytes_loan(sourcePtr.cast());
     bindings.zd_deserializer_from_bytes(loaned, ptr);
     return ptr;
   }
 
   void _checkState() {
     if (_disposed) throw StateError('ZDeserializer has been disposed');
+    if (!_source.isLive) {
+      // The cursor points into the source's native storage, so reading after
+      // the source is released is a use-after-free the VM cannot see. Fail
+      // loudly instead.
+      throw StateError(
+        'ZDeserializer source ZBytes has been disposed or consumed',
+      );
+    }
   }
 
   /// Returns true if all data has been deserialized.
@@ -185,9 +243,29 @@ class ZDeserializer {
   }
 
   /// Deserializes a UTF-8 string value.
+  ///
+  /// ⛔ **Throws [ZenohException] with `returnCode` `-7` (canon's
+  /// `Z_EDESERIALIZE`) when the bytes in the string slot are not valid
+  /// UTF-8.** Canon deserializes into a Rust `String`, which validates, and
+  /// this binding surfaces its refusal.
+  ///
+  /// ⚠️ **It does NOT return U+FFFD, and the dartdoc here used to promise
+  /// that it did.** The promise was unreachable rather than merely unusual:
+  /// canon's validation happens first, so the lenient decode below never sees
+  /// an invalid sequence. Measured — bytes written by the non-validating
+  /// serialize-side twin come back from this method as a throw, never as a
+  /// replacement character.
+  ///
+  /// The reachable way to get here is a payload whose string slot was filled
+  /// by a non-validating writer: `ze_serializer_serialize_slice` takes raw
+  /// bytes while `ze_serializer_serialize_string` validates on the way in and
+  /// returns `Z_EUTF8`, and the two emit the same length-prefixed byte run.
+  ///
+  /// Valid content round-trips exactly, multi-byte included, and an empty
+  /// string comes back as an empty string rather than as a failure.
   String deserializeString() {
     _checkState();
-    final Pointer<Void> ownedStr = calloc.allocate(bindings.zd_string_sizeof());
+    final ownedStr = calloc.allocate<Void>(bindings.zd_string_sizeof());
     try {
       final rc = bindings.zd_deserializer_deserialize_string(
         _ptr,
@@ -197,8 +275,16 @@ class ZDeserializer {
       final loanedStr = bindings.zd_string_loan(ownedStr.cast());
       final data = bindings.zd_string_data(loanedStr);
       final len = bindings.zd_string_len(loanedStr);
-      final result = data.cast<Utf8>().toDartString(length: len);
-      return result;
+      if (len == 0) return '';
+      final bytes = data.cast<Uint8>().asTypedList(len);
+      // ⚠️ `allowMalformed` is UNREACHABLE at the pinned zenoh-c and is kept
+      // deliberately. Canon validates before we get here (it deserializes
+      // into a Rust `String`), so an invalid sequence throws above and never
+      // reaches this line. It stays as a defence for the day canon's
+      // validation relaxes -- and this comment stays with it, so a later
+      // reader neither deletes it as dead code nor re-documents it as a
+      // promise this method makes.
+      return utf8.decode(bytes, allowMalformed: true);
     } finally {
       bindings.zd_string_drop(ownedStr.cast());
       calloc.free(ownedStr);
@@ -208,7 +294,7 @@ class ZDeserializer {
   /// Deserializes a byte buffer.
   Uint8List deserializeBytes() {
     _checkState();
-    final Pointer<Void> ownedBytes = calloc.allocate(
+    final ownedBytes = calloc.allocate<Void>(
       bindings.zd_bytes_sizeof(),
     );
     try {
@@ -253,9 +339,18 @@ class ZDeserializer {
   /// Releases native resources held by this deserializer.
   ///
   /// Safe to call multiple times -- subsequent calls are no-ops.
+  ///
+  /// Also **detaches this object's finalizer**, so the safety net cannot
+  /// release it a second time.
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    // DETACH BEFORE THE FREE. A missed detach here is a double free: the
+    // finalizer would later hand the same block to `free()` a second time.
+    // Detaching an already-detached key is harmless, which is what keeps the
+    // "safe to call multiple times" contract above true -- that sentence now
+    // also means "and the net is taken down exactly once".
+    freeBlockFinalizer.detach(this);
     calloc.free(_ptr);
   }
 }

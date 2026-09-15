@@ -4,37 +4,43 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultKeyExpr = 'group1/zenoh-dart';
 
+const helpText =
+    '''
+    Usage: z_liveliness [OPTIONS]
+
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression for the liveliness token
+''';
+
 Future<void> main(List<String> arguments) async {
-  final parser = ArgParser()
-    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
-
-  final results = parser.parse(arguments);
-  final keyExpr = results.option('key')!;
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
-
-  if (keyExpr.isEmpty) {
-    stderr.writeln('Error: key expression must not be empty');
-    exit(1);
-  }
-
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr);
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final keyExpr = results.option('key')!;
+  final config = buildConfig(results);
+
+  // canon validates the full key expression before opening the session
+  // (z_liveliness.c:34-37); an emptiness check alone lets a syntactically
+  // invalid expression through to a post-open throw.
+  try {
+    KeyExpr(keyExpr).dispose();
+  } on ZenohException {
+    print('$keyExpr is not a valid key expression');
+    exit(canonFailureExit);
+  }
+
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   final token = session.declareLivelinessToken(keyExpr);
   print("Liveliness token declared on '$keyExpr'");

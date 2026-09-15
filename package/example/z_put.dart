@@ -1,38 +1,40 @@
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultKeyExpr = 'demo/example/zenoh-dart-put';
 const defaultValue = 'Put from Dart!';
 
-void main(List<String> arguments) {
-  final parser = ArgParser()
-    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
-    ..addOption('payload', abbr: 'p', defaultsTo: defaultValue)
-    ..addMultiOption('connect', abbr: 'e')
-    ..addMultiOption('listen', abbr: 'l');
+const helpText =
+    '''
+    Usage: z_put [OPTIONS]
 
-  final results = parser.parse(arguments);
-  final keyExpr = results.option('key')!;
-  final value = results.option('payload')!;
-  final connectEndpoints = results.multiOption('connect');
-  final listenEndpoints = results.multiOption('listen');
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression to write to
+        -p, --payload <PAYLOAD> (optional, string, default='$defaultValue'): The value to write
+''';
 
+Future<void> main(List<String> arguments) async {
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr)
+    ..addOption('payload', abbr: 'p', defaultsTo: defaultValue);
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final keyExpr = results.option('key')!;
+  final value = results.option('payload')!;
+  final config = buildConfig(results);
+
   print('Opening session...');
-  final config = Config();
-  if (connectEndpoints.isNotEmpty) {
-    final json = '[${connectEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('connect/endpoints', json);
-  }
-  if (listenEndpoints.isNotEmpty) {
-    final json = '[${listenEndpoints.map((e) => '"$e"').join(',')}]';
-    config.insertJson5('listen/endpoints', json);
-  }
-  final session = Session.open(config: config);
+  final session = await openSession(config);
 
   print("Putting Data ('$keyExpr': '$value')...");
-  session.put(keyExpr, value);
-
-  session.close();
+  session
+    ..put(keyExpr, value)
+    ..close();
 }

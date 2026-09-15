@@ -3,25 +3,46 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
-import 'bytes.dart';
-import 'exceptions.dart';
-import 'native_lib.dart';
+import 'package:zenoh_dart/src/bytes.dart';
+import 'package:zenoh_dart/src/exceptions.dart';
+import 'package:zenoh_dart/src/finalizers.dart';
+import 'package:zenoh_dart/src/native_lib.dart';
 
 /// A zenoh bytes writer for assembling raw byte payloads.
 ///
 /// Wraps `z_owned_bytes_writer_t`. Call [finish] to produce a [ZBytes],
 /// or [dispose] to release native resources without finishing.
-class ZBytesWriter {
+///
+/// This object holds a native handle, so it **cannot cross an isolate
+/// boundary**: a copy would share this one's native address while carrying
+/// its own fresh disposal flag, and the second release would be a
+/// use-after-free. Sending it throws `ArgumentError` naming the class.
+///
+/// It carries a `NativeFinalizer` **safety net**: if it is dropped without an
+/// explicit release, its native resources are reclaimed when the object is
+/// collected.
+/// ⛔ The net is **not a substitute** for releasing it explicitly — a finalizer
+/// runs at an unpredictable time, or not at all if the program exits first.
+class ZBytesWriter implements Finalizable {
+  /// Creates an empty bytes writer.
+  ZBytesWriter() : _ptr = _create() {
+    // `_create` either returns a live slot or does not return, so reaching
+    // here means the object exists and the net is safe to arm.
+    bytesWriterFinalizer.attach(
+      this,
+      _ptr.cast(),
+      detach: this,
+      externalSize: bindings.zd_bytes_writer_sizeof(),
+    );
+  }
+
   final Pointer<Void> _ptr;
   bool _finished = false;
   bool _disposed = false;
 
-  /// Creates an empty bytes writer.
-  ZBytesWriter() : _ptr = _create();
-
   static Pointer<Void> _create() {
     final size = bindings.zd_bytes_writer_sizeof();
-    final Pointer<Void> ptr = calloc.allocate(size);
+    final ptr = calloc.allocate<Void>(size);
     bindings.zd_bytes_writer_empty(ptr.cast());
     return ptr;
   }
@@ -45,7 +66,7 @@ class ZBytesWriter {
   /// Throws [ZenohException] if the native write fails.
   void writeAll(Uint8List data) {
     _checkState();
-    final Pointer<Uint8> nativeBuf = calloc.allocate(data.length);
+    final nativeBuf = calloc.allocate<Uint8>(data.length);
     try {
       for (var i = 0; i < data.length; i++) {
         nativeBuf[i] = data[i];
@@ -73,8 +94,24 @@ class ZBytesWriter {
       _loanMut().cast(),
       bytes.nativePtr.cast(),
     );
-    if (rc != 0) throw ZenohException('Failed to append bytes', rc);
+    // markConsumed is unconditional and runs BEFORE the rc-throw: the shim
+    // zd_bytes_writer_append z_bytes_move's the owned bytes, gravestoning the
+    // native handle regardless of the return code. Marking before the throw
+    // prevents a later use-after-move on any rc != 0 outcome, mirroring every
+    // other send site (session.dart:250/302/844, query.dart:171).
+    //
+    // This ordering cannot be tested dynamically, and the rationale lives here
+    // because that is the only place it can do any work. Every precondition
+    // that could make the call return rc != 0 is intercepted earlier --
+    // _checkState() (finished/disposed -> StateError) and bytes.nativePtr's
+    // _ensureNotConsumed (consumed -> StateError) -- so no reachable public-API
+    // path drives the error branch. Two tests once guarded this line; both
+    // exercised only the success path and passed with or without the reorder,
+    // so they were removed as dead weight (the success-path consume contract
+    // remains pinned by bytes_writer_test's 'append consumes the ZBytes').
+    // If you reorder these two statements, no test will tell you.
     bytes.markConsumed();
+    if (rc != 0) throw ZenohException('Failed to append bytes', rc);
   }
 
   /// Finishes the writer and returns the produced [ZBytes].
@@ -86,7 +123,11 @@ class ZBytesWriter {
   ZBytes finish() {
     _checkState();
     _finished = true;
-    final Pointer<Void> bytesPtr = calloc.allocate(bindings.zd_bytes_sizeof());
+    // ⛔ `finish()` IS A RELEASE PATH. It moves the handle into canon and frees
+    // the slot below, so without this detach the net would later drop a moved
+    // handle and free the slot a second time.
+    bytesWriterFinalizer.detach(this);
+    final bytesPtr = calloc.allocate<Void>(bindings.zd_bytes_sizeof());
     bindings.zd_bytes_writer_finish(_ptr.cast(), bytesPtr.cast());
     calloc.free(_ptr);
     return ZBytes.fromNative(bytesPtr);
@@ -97,13 +138,20 @@ class ZBytesWriter {
   /// Safe to call multiple times -- subsequent calls are no-ops.
   /// Safe to call after [finish] -- no-op since resources were
   /// already transferred.
+  ///
+  /// Also **detaches this object's finalizer**, so the safety net cannot
+  /// release it a second time.
   void dispose() {
     if (_disposed) return;
     if (_finished) {
+      // `finish()` already detached and released; a second detach here would
+      // be harmless but the early return makes it unreachable, and saying so
+      // is what keeps the "safe to call multiple times" note honest.
       _disposed = true;
       return;
     }
     _disposed = true;
+    bytesWriterFinalizer.detach(this);
     bindings.zd_bytes_writer_drop(_ptr.cast());
     calloc.free(_ptr);
   }

@@ -1,0 +1,6 @@
+# Generated FFI bindings.
+package/lib/src/bindings.dart linguist-generated=true
+
+# Native libraries are committed as ordinary binary files. ⛔ No Git LFS: a filter
+# attribute on them would store pointers where the libraries should be.
+*.so binary

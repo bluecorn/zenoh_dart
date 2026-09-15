@@ -1,22 +1,36 @@
 import 'package:args/args.dart';
 import 'package:zenoh_dart/zenoh.dart';
 
+import 'common_args.dart';
+
 const defaultKeyExpr = 'demo/example/zenoh-dart-put';
 
-void main(List<String> arguments) {
-  final parser = ArgParser()
-    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr);
+const helpText =
+    '''
+    Usage: z_delete [OPTIONS]
 
-  final results = parser.parse(arguments);
-  final keyExpr = results.option('key')!;
+    Options:
+        -k, --key <KEYEXPR> (optional, string, default='$defaultKeyExpr'): The key expression to write to
+''';
 
+Future<void> main(List<String> arguments) async {
   Zenoh.initLog('error');
 
+  final parser = ArgParser()
+    ..addOption('key', abbr: 'k', defaultsTo: defaultKeyExpr);
+  addCommonArgs(parser);
+
+  final results = parseArgs(parser, arguments, helpText);
+  checkNoPositionalArgs(results);
+
+  final keyExpr = results.option('key')!;
+  final config = buildConfig(results);
+
   print('Opening session...');
-  final session = Session.open();
+  final session = await openSession(config);
 
   print("Deleting resources matching '$keyExpr'...");
-  session.deleteResource(keyExpr);
-
-  session.close();
+  session
+    ..deleteResource(keyExpr)
+    ..close();
 }

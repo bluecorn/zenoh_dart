@@ -2,14 +2,15 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:zenoh_dart/zenoh.dart';
+
 // Slice 7: ZBytesWriter tests
 
 void main() {
   group('ZBytesWriter', () {
     test('writeAll assembles bytes', () {
-      final writer = ZBytesWriter();
-      writer.writeAll(Uint8List.fromList([0, 1, 2]));
-      writer.writeAll(Uint8List.fromList([3, 4]));
+      final writer = ZBytesWriter()
+        ..writeAll(Uint8List.fromList([0, 1, 2]))
+        ..writeAll(Uint8List.fromList([3, 4]));
       final result = writer.finish();
       addTearDown(result.dispose);
       expect(result.toBytes(), equals(Uint8List.fromList([0, 1, 2, 3, 4])));
@@ -19,10 +20,10 @@ void main() {
       final a = ZBytes.fromString('abc');
       final b = ZBytes.fromString('def');
       final c = ZBytes.fromString('hij');
-      final writer = ZBytesWriter();
-      writer.append(a);
-      writer.append(b);
-      writer.append(c);
+      final writer = ZBytesWriter()
+        ..append(a)
+        ..append(b)
+        ..append(c);
       final result = writer.finish();
       addTearDown(result.dispose);
 
@@ -36,11 +37,11 @@ void main() {
     });
 
     test('mixed write and append', () {
-      final writer = ZBytesWriter();
-      writer.writeAll(Uint8List.fromList([0, 1]));
+      final writer = ZBytesWriter()..writeAll(Uint8List.fromList([0, 1]));
       final mid = ZBytes.fromString('mid');
-      writer.append(mid);
-      writer.writeAll(Uint8List.fromList([9]));
+      writer
+        ..append(mid)
+        ..writeAll(Uint8List.fromList([9]));
       final result = writer.finish();
       addTearDown(result.dispose);
       expect(
@@ -51,24 +52,22 @@ void main() {
 
     test('append consumes the ZBytes', () {
       final bytes = ZBytes.fromString('test');
-      final writer = ZBytesWriter();
-      writer.append(bytes);
+      final writer = ZBytesWriter()..append(bytes);
       // The appended ZBytes should be consumed
-      expect(() => bytes.toStr(), throwsStateError);
-      final result = writer.finish();
-      result.dispose();
+      expect(bytes.toStr, throwsStateError);
+      writer.finish().dispose();
     });
 
     test('finish then finish throws StateError', () {
       final writer = ZBytesWriter();
       final result = writer.finish();
       addTearDown(result.dispose);
-      expect(() => writer.finish(), throwsStateError);
+      expect(writer.finish, throwsStateError);
     });
 
     test('dispose without finish is safe', () {
       final writer = ZBytesWriter();
-      expect(() => writer.dispose(), returnsNormally);
+      expect(writer.dispose, returnsNormally);
     });
   });
 }

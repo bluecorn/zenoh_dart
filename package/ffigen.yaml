@@ -5,6 +5,12 @@ headers:
   entry-points:
     - ../src/zenoh_dart.h
 compiler-opts:
+  # Parse the headers the C shim was actually compiled against: the build tree's
+  # generated set (zenoh_opaque.h / zenoh_configure.h are generated, not tracked,
+  # and carry the correct opaque-type bodies + feature flags — SHM/unstable — for
+  # this version). Listed FIRST so it wins over any stale generated headers left
+  # in the submodule include dir. Requires a prior `cmake --build --preset linux-x64`.
+  - '-I../build/linux-x64/extern/zenoh-c/release/include'
   - '-I../extern/zenoh-c/include'
 functions:
   include:
