@@ -1,0 +1,11 @@
+date_utc: 2026-09-15T06:39:17Z
+uname: Linux bluecorn 7.0.0-31-generic #31-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 04:26:38 UTC 2026 x86_64 GNU/Linux
+glibc: ldd (Ubuntu GLIBC 2.43-2ubuntu2.4) 2.43
+clang: Ubuntu clang version 21.1.8 (6ubuntu1)
+cmake: cmake version 4.2.3
+ninja: 1.13.2
+cargo: cargo 1.93.0 (083ac5135 2025-12-15)
+rustc: rustc 1.93.0 (254b59607 2026-01-19)
+cargo_ndk: cargo-ndk 4.1.2
+dart: Dart SDK version: 3.13.1 (stable) (Tue Aug 18 01:00:59 2026 -0700) on "linux_x64"
+ndk: /home/hugo/Android/Sdk/ndk/28.2.13676358 (Pkg.Revision = 28.2.13676358)
