@@ -21,6 +21,18 @@ your application. There is nothing to compile.
 ## Install
 
 ```sh
+dart pub add zenoh_dart
+```
+
+0.30.0 is a mirror of the release candidate 1.0.0-rc.1 and is provided as a convenience for usage and as a record of the
+current state of the zenoh_dart project. It carries the same code and the same native libraries, built from the same source —
+the two releases differ only in their version number, so **do not depend on both in one project**. Every release candidate
+until 1.0.0 is mirrored the same way.
+
+pub never makes a prerelease the latest version, which is why the candidate itself is not what a bare `pub add` resolves. To
+pin it instead:
+
+```sh
 dart pub add 'zenoh_dart:^1.0.0-rc.1'
 ```
 

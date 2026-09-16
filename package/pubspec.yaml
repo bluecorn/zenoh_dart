@@ -1,6 +1,6 @@
 name: zenoh_dart
 description: "Dart bindings for Zenoh, the pub/sub/query protocol, via FFI to zenoh-c 1.8.0. Linux and Android."
-version: 1.0.0-rc.1
+version: 0.30.0
 repository: https://github.com/bluecorn/zenoh_dart
 issue_tracker: https://github.com/bluecorn/zenoh_dart/issues
 topics:

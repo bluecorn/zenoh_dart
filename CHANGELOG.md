@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.30.0 — 2026-09-16
+
+**A mirror of the release candidate `1.0.0-rc.1`** — the same code and the same sixteen native libraries, built from the same
+source, published under a `0.x` version so that a bare `dart pub add zenoh_dart` resolves to the current state of the package.
+pub never makes a prerelease the latest version, so without this a bare add still takes `0.20.0`, which is the 1.7.2-era API.
+Every release candidate until `1.0.0` is mirrored the same way.
+
+**The API may still change before 1.0.0.**
+
+⚠️ **The two releases differ only in their version number, so do not depend on both in one project.**
+
+**What is in it** is what `1.0.0-rc.1` announced: see the `1.0.0-rc.1` section below for the breaking changes, the additions
+and the fixes. Nothing is added or removed here.
+
+The native libraries are byte-identical to the ones `1.0.0-rc.1` ships — both releases' `native/manifest.json` carry the same
+`aggregate_sha256`, and so do the two release tags.
+
+### Known issues
+
+- **Linux: the native library is looked up in the current working directory.** When the package's own
+  directory holds no copy of the library — which is the case when the package comes from the pub cache,
+  and in executables built with `dart build cli` — the loader looks for `.dart_tool/lib/libzenoh_dart.so`
+  relative to the process's **working directory**, and only then asks the system loader for
+  `libzenoh_dart.so` by name. So:
+  - **A process started in a directory that someone else can write to can load a library placed there and
+    run its code**, even with `LD_LIBRARY_PATH` set, because the working directory is searched first.
+  - **A process started in a directory without that file fails** with `Could not find libzenoh_dart.so`.
+    `dart run` works from the project directory, where the build hook places the library. An executable
+    built with `dart build cli` does not look in its own bundle: run it with `LD_LIBRARY_PATH` set to the
+    bundle's `lib/` directory.
+
+  Until this is fixed, start these processes only from a directory you control. `dart compile exe` refuses
+  packages with build hooks, so it cannot build an executable from this package. **This issue blocks
+  1.0.0.**
+
 ## 1.0.0-rc.1 — 2026-09-13
 
 Release candidate for 1.0.0 — the API may still change before 1.0.0.
